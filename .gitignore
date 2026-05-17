@@ -1,0 +1,30 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.python-version
+
+# C build artifacts
+storagemark/c/storagescanner
+storagemark/c/*.o
+
+# StorageMark output files
+storagemark_export_*.csv
+storagemark_export_*.json
+storagemark_cleanup_*.sh
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
