@@ -72,9 +72,6 @@ class FilesView:
         elif key == ord('S'):
             self._sort_rev = not self._sort_rev
             self._rebuild()
-        elif key == ord('u'):
-            units = ["auto", "GB", "MB", "KB", "B"]
-            self._unit = units[(units.index(self._unit) + 1) % len(units)]
         elif key == ord(' '):
             node = self._sl.selected()
             if node:

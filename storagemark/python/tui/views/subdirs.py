@@ -12,6 +12,7 @@ class SubdirsView:
         self._filter = FilterBar()
         self._sort_idx = 0
         self._sort_rev = False
+        self._unit = "auto"
         self._expanded: set[str] = set()
         self._tree: DirTree | None = None
         self._marked: set[str] = set()
@@ -112,7 +113,7 @@ class SubdirsView:
             frac = size / total if total else 0
             pct = frac * 100
             name_w = max(10, width - 42)
-            line = f"{mark} {truncate(name_part, name_w)} {fmt_size(size):>10}  "
+            line = f"{mark} {truncate(name_part, name_w)} {fmt_size(size, self._unit):>10}  "
             attr = curses.A_REVERSE if idx == self._sl.cursor else 0
             safe_addstr(win, y, x0, line, attr)
             draw_bar(win, y, x0 + len(line), frac)

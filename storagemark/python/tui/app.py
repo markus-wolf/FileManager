@@ -44,6 +44,7 @@ class App:
         self._view_idx = start_view
         self._views: dict[int, object] = {}
         self._help_open = False
+        self._unit = "auto"
 
     # ------------------------------------------------------------------ #
     # Scanning (background thread)                                         #
@@ -182,6 +183,13 @@ class App:
                 t = threading.Thread(target=self._scan_thread, daemon=True)
                 t.start()
                 continue
+            elif key == ord('u'):
+                units = ["auto", "GB", "MB", "KB", "B"]
+                self._unit = units[(units.index(self._unit) + 1) % len(units)]
+                for v in self._views.values():
+                    if hasattr(v, '_unit'):
+                        v._unit = self._unit
+                continue
             elif key == ord('e'):
                 self._do_export(view)
                 continue
@@ -216,6 +224,7 @@ class App:
     def _prompt_path(self, stdscr, h, w):
         curses.echo()
         curses.curs_set(1)
+        stdscr.nodelay(False)   # block until user presses Enter
         prompt = " New path: "
         safe_addstr(stdscr, h - 1, 0, truncate(prompt, w), curses.color_pair(5))
         stdscr.refresh()
@@ -225,6 +234,7 @@ class App:
             new_path = ""
         curses.noecho()
         curses.curs_set(0)
+        stdscr.nodelay(True)    # restore non-blocking
         if new_path and os.path.isdir(new_path):
             self._root = os.path.abspath(new_path)
             self._records.clear()
