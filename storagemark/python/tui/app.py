@@ -62,6 +62,8 @@ class App:
             self._tree = DirTree.build(self._records)
         except Exception:
             pass
+        finally:
+            self._records.clear()   # free raw dicts — tree owns the data now
         self._scan_done.set()
 
     # ------------------------------------------------------------------ #
@@ -97,6 +99,18 @@ class App:
     # Main loop                                                            #
     # ------------------------------------------------------------------ #
 
+    def _interrupt_scan(self):
+        """Stop an in-progress scan and build a partial tree from whatever arrived."""
+        self._partial = True
+        self._scan_done.set()           # unblock the UI immediately
+        if self._records:
+            try:
+                self._tree = DirTree.build(self._records)
+            except Exception:
+                pass
+            finally:
+                self._records.clear()
+
     def run(self, stdscr):
         curses.curs_set(0)
         stdscr.nodelay(True)
@@ -109,99 +123,110 @@ class App:
 
         loaded = False
 
-        while True:
-            h, w = stdscr.getmaxyx()
-            view_h = h - HEADER_ROWS - FOOTER_ROWS
-            view_y = HEADER_ROWS
+        try:
+            while True:
+                h, w = stdscr.getmaxyx()
+                view_h = h - HEADER_ROWS - FOOTER_ROWS
+                view_y = HEADER_ROWS
 
-            # Once scan completes, load all views once
-            if self._scan_done.is_set() and not loaded:
-                if self._tree:
-                    self._reload_all()
+                # Once scan completes, load all views once
+                if self._scan_done.is_set() and not loaded:
+                    if self._tree:
+                        self._reload_all()
                     loaded = True
 
-            # Draw header
-            draw_header(stdscr, self._tree, self._root, self._scan_time,
-                        self._view_idx, w, self._partial)
+                # Draw header
+                draw_header(stdscr, self._tree, self._root, self._scan_time,
+                            self._view_idx, w, self._partial)
 
-            # Draw current view
-            view = self._get_view(self._view_idx)
-            if self._tree and view:
-                stdscr.move(view_y, 0)
-                for row in range(view_h):
-                    stdscr.move(view_y + row, 0)
-                    stdscr.clrtoeol()
-                view.draw(stdscr, view_y, 0, view_h, w)
-            elif not self._scan_done.is_set():
-                dots = "." * (int(time.time() * 2) % 4)
-                msg = f"  Scanning {self._root}{dots}  ({len(self._records):,} records)"
-                safe_addstr(stdscr, view_y + view_h // 2, 0,
-                            truncate(msg, w), curses.color_pair(1))
+                # Draw current view
+                view = self._get_view(self._view_idx)
+                if self._tree and view:
+                    stdscr.move(view_y, 0)
+                    for row in range(view_h):
+                        stdscr.move(view_y + row, 0)
+                        stdscr.clrtoeol()
+                    view.draw(stdscr, view_y, 0, view_h, w)
+                elif not self._scan_done.is_set():
+                    dots = "." * (int(time.time() * 2) % 4)
+                    msg = f"  Scanning {self._root}{dots}  ({len(self._records):,} records)"
+                    safe_addstr(stdscr, view_y + view_h // 2, 0,
+                                truncate(msg, w), curses.color_pair(1))
 
-            draw_footer(stdscr, h, w)
+                draw_footer(stdscr, h, w)
 
-            if self._help_open:
-                self._draw_help(stdscr, h, w)
+                if self._help_open:
+                    self._draw_help(stdscr, h, w)
 
-            stdscr.refresh()
+                stdscr.refresh()
 
-            # Input
-            try:
-                key = stdscr.getch()
-            except curses.error:
-                key = -1
+                # Input — sleep is the most likely place for KeyboardInterrupt
+                try:
+                    key = stdscr.getch()
+                except curses.error:
+                    key = -1
 
-            if key == -1:
-                time.sleep(0.05)
-                continue
+                if key == -1:
+                    try:
+                        time.sleep(0.05)
+                    except KeyboardInterrupt:
+                        # Ctrl-C while idle: stop scan, build partial tree, stay in TUI
+                        self._interrupt_scan()
+                        self._reload_all()
+                        loaded = True
+                    continue
 
-            if self._help_open:
-                self._help_open = False
-                continue
+                if self._help_open:
+                    self._help_open = False
+                    continue
 
-            # Global keys
-            if key == ord('q'):
-                break
-            elif key == ord('?'):
-                self._help_open = True
-                continue
-            elif key in (ord('1'), ord('2'), ord('3'), ord('4'), ord('5')):
-                new_idx = key - ord('0')
-                self._view_idx = new_idx
-                if self._tree and new_idx not in self._views:
-                    self._load_view(new_idx)
-                elif self._tree:
-                    self._load_view(new_idx)
-                continue
-            elif key == ord('r'):
-                # Re-scan
-                self._records.clear()
-                self._tree = None
-                self._views.clear()
-                self._scan_done.clear()
-                loaded = False
-                t = threading.Thread(target=self._scan_thread, daemon=True)
-                t.start()
-                continue
-            elif key == ord('u'):
-                units = ["auto", "GB", "MB", "KB", "B"]
-                self._unit = units[(units.index(self._unit) + 1) % len(units)]
-                for v in self._views.values():
-                    if hasattr(v, '_unit'):
-                        v._unit = self._unit
-                continue
-            elif key == ord('e'):
-                self._do_export(view)
-                continue
-            elif key == ord('p'):
-                self._prompt_path(stdscr, h, w)
-                continue
+                # Global keys
+                if key == ord('q'):
+                    break
+                elif key == ord('?'):
+                    self._help_open = True
+                    continue
+                elif key in (ord('1'), ord('2'), ord('3'), ord('4'), ord('5')):
+                    new_idx = key - ord('0')
+                    self._view_idx = new_idx
+                    if self._tree and new_idx not in self._views:
+                        self._load_view(new_idx)
+                    elif self._tree:
+                        self._load_view(new_idx)
+                    continue
+                elif key == ord('r'):
+                    # Re-scan
+                    self._records.clear()
+                    self._tree = None
+                    self._views.clear()
+                    self._scan_done.clear()
+                    loaded = False
+                    t = threading.Thread(target=self._scan_thread, daemon=True)
+                    t.start()
+                    continue
+                elif key == ord('u'):
+                    units = ["auto", "GB", "MB", "KB", "B"]
+                    self._unit = units[(units.index(self._unit) + 1) % len(units)]
+                    for v in self._views.values():
+                        if hasattr(v, '_unit'):
+                            v._unit = self._unit
+                    continue
+                elif key == ord('e'):
+                    self._do_export(view)
+                    continue
+                elif key == ord('p'):
+                    self._prompt_path(stdscr, h, w)
+                    continue
 
-            # Delegate to current view
-            if view and self._tree:
-                result = view.handle_key(key)
-                if result:
-                    self._handle_view_result(result)
+                # Delegate to current view
+                if view and self._tree:
+                    result = view.handle_key(key)
+                    if result:
+                        self._handle_view_result(result)
+
+        except KeyboardInterrupt:
+            # Ctrl-C during draw or key-handler — exit TUI cleanly
+            pass
 
     def _handle_view_result(self, result: str):
         if result.startswith("drill_ext:"):
@@ -276,4 +301,7 @@ class App:
 
 def run_tui(root: str, start_view: int = 1, scanner_kwargs: dict | None = None):
     app = App(root, start_view, scanner_kwargs)
-    curses.wrapper(app.run)
+    try:
+        curses.wrapper(app.run)
+    except KeyboardInterrupt:
+        pass   # terminal already restored by curses.wrapper; exit silently

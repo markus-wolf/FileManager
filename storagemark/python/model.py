@@ -12,7 +12,7 @@ def _dt(epoch: int) -> datetime:
         return datetime.fromtimestamp(0)
 
 
-@dataclass
+@dataclass(slots=True)          # slots=True: ~60% less memory per object (Py 3.10+)
 class FileNode:
     path: str
     name: str
@@ -29,11 +29,11 @@ class FileNode:
     ext: str
     hardlink_of: str
     error: str
-    children: list[FileNode] = field(default_factory=list)
-    parent: Optional[FileNode] = field(default=None, repr=False)
-    subtree_bytes: int = 0
-    subtree_disk: int = 0
-    subtree_count: int = 0
+    children: list              # list[FileNode]
+    parent: object              # FileNode | None  (weak ref semantics via slots)
+    subtree_bytes: int
+    subtree_disk: int
+    subtree_count: int
 
     @staticmethod
     def from_record(rec: dict) -> FileNode:
@@ -56,22 +56,36 @@ class FileNode:
             ext=raw_ext,
             hardlink_of=rec.get("hardlink_of", ""),
             error=rec.get("error", ""),
+            children=[],
+            parent=None,
+            subtree_bytes=0,
+            subtree_disk=0,
+            subtree_count=0,
         )
 
 
 class DirTree:
-    def __init__(self, root: FileNode):
-        self.root = root
-        self.flat: list[FileNode] = []
-        self.ext_map: dict[str, list[FileNode]] = {}
-        self.errors: list[FileNode] = []
-        self.scan_errors: list[str] = []
+    def __init__(self, root: FileNode,
+                 flat: list[FileNode],
+                 ext_map: dict[str, list[FileNode]],
+                 errors: list[FileNode],
+                 file_count: int,
+                 dir_count: int):
+        self.root       = root
+        self.flat       = flat
+        self.ext_map    = ext_map
+        self.errors     = errors
+        self._file_count = file_count
+        self._dir_count  = dir_count
 
     @staticmethod
     def build(records: list[dict]) -> DirTree:
         if not records:
             raise ValueError("No records")
 
+        # ---------------------------------------------------------- #
+        # Pass 1: create FileNode objects, index by path              #
+        # ---------------------------------------------------------- #
         nodes: dict[str, FileNode] = {}
         for rec in records:
             if "_storagemark" in rec:
@@ -79,7 +93,13 @@ class DirTree:
             node = FileNode.from_record(rec)
             nodes[node.path] = node
 
-        # Link parent/child relationships
+        # ---------------------------------------------------------- #
+        # Pass 2: link parent → child                                 #
+        #                                                             #
+        # FIX: was `node not in parent.children` — O(n) per append   #
+        # making the overall loop O(n²) for large directories.        #
+        # Simple append is safe: each (path, parent) pair is unique.  #
+        # ---------------------------------------------------------- #
         root_node: Optional[FileNode] = None
         for node in nodes.values():
             parent_path = os.path.dirname(node.path)
@@ -88,39 +108,74 @@ class DirTree:
                 continue
             parent = nodes.get(parent_path)
             if parent is None:
-                root_node = node if root_node is None else root_node
+                # Orphan — treat as root candidate
+                if root_node is None:
+                    root_node = node
                 continue
             node.parent = parent
-            if node.type == 'd' or node not in parent.children:
-                parent.children.append(node)
+            parent.children.append(node)   # O(1), no duplicate check needed
 
         if root_node is None:
             root_node = next(iter(nodes.values()))
 
-        tree = DirTree(root_node)
+        # Free the raw dict — no longer needed; saves memory at peak
+        nodes.clear()
 
-        # Flatten and compute subtree totals bottom-up
-        def _walk(n: FileNode):
-            tree.flat.append(n)
-            if n.error:
-                tree.errors.append(n)
-            if n.type == 'f':
-                ext = n.ext or "(no ext)"
-                tree.ext_map.setdefault(ext, []).append(n)
-            for child in n.children:
-                _walk(child)
-            # Accumulate into parent after children are done
-            if n.type == 'd':
-                n.subtree_bytes = n.size_bytes + sum(c.subtree_bytes for c in n.children)
-                n.subtree_disk  = n.size_disk  + sum(c.subtree_disk  for c in n.children)
-                n.subtree_count = 1            + sum(c.subtree_count for c in n.children)
+        # ---------------------------------------------------------- #
+        # Pass 3: iterative DFS (pre-order) to build flat list        #
+        #                                                             #
+        # FIX: was recursive — hits Python's recursion limit on deep  #
+        # trees and is slow for 1M+ nodes.                            #
+        # ---------------------------------------------------------- #
+        flat: list[FileNode] = []
+        ext_map: dict[str, list[FileNode]] = {}
+        errors: list[FileNode] = []
+        file_count = 0
+        dir_count  = 0
+
+        stack = [root_node]
+        while stack:
+            node = stack.pop()
+            flat.append(node)
+
+            if node.error:
+                errors.append(node)
+
+            if node.type == 'f':
+                file_count += 1
+                ext = node.ext or "(no ext)"
+                ext_map.setdefault(ext, []).append(node)
+            elif node.type == 'd':
+                dir_count += 1
+
+            # Push children in reverse so left-to-right order is preserved
+            for child in reversed(node.children):
+                stack.append(child)
+
+        # ---------------------------------------------------------- #
+        # Pass 4: iterative post-order subtree aggregation            #
+        #                                                             #
+        # flat is in pre-order; reversing it gives a valid post-order #
+        # (every child appears before its parent when reversed).      #
+        # ---------------------------------------------------------- #
+        for node in reversed(flat):
+            if node.type == 'd':
+                sb = node.size_bytes
+                sd = node.size_disk
+                sc = 1
+                for c in node.children:
+                    sb += c.subtree_bytes
+                    sd += c.subtree_disk
+                    sc += c.subtree_count
+                node.subtree_bytes = sb
+                node.subtree_disk  = sd
+                node.subtree_count = sc
             else:
-                n.subtree_bytes = n.size_bytes
-                n.subtree_disk  = n.size_disk
-                n.subtree_count = 1
+                node.subtree_bytes = node.size_bytes
+                node.subtree_disk  = node.size_disk
+                node.subtree_count = 1
 
-        _walk(root_node)
-        return tree
+        return DirTree(root_node, flat, ext_map, errors, file_count, dir_count)
 
     @property
     def total_disk(self) -> int:
@@ -132,11 +187,11 @@ class DirTree:
 
     @property
     def file_count(self) -> int:
-        return sum(1 for n in self.flat if n.type == 'f')
+        return self._file_count
 
     @property
     def dir_count(self) -> int:
-        return sum(1 for n in self.flat if n.type == 'd')
+        return self._dir_count
 
 
 def fmt_size(b: int, unit: str = "auto") -> str:

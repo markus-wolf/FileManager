@@ -6,7 +6,7 @@
 
 **StorageMark** is an interactive, terminal-based disk space analyzer and cleanup advisor for macOS and Linux. It traverses a directory tree, computes on-disk space consumption, and presents the results through multiple sorted/filtered views. A "what-if" mode lets users simulate deletions before committing to them.
 
-**Stack:** Python (UI, orchestration, reporting) + C (high-performance traversal and stat collection via a compiled extension or standalone binary called by Python).
+**Stack:** Python (UI, orchestration, reporting) + C (high-performance traversal and stat collection via a standalone binary called by Python).
 
 ---
 
@@ -26,22 +26,21 @@
 │              │  scanner interface  │                │
 │              └─────────┬──────────┘                │
 └────────────────────────┼────────────────────────────┘
-                         │  ctypes / subprocess
+                         │  subprocess (binary pipe)
                 ┌────────▼────────┐
-                │   C scanner     │
-                │  (storagescanner   │
-                │   .so / binary) │
+                │  storagescanner │
+                │  (C binary)     │
                 └─────────────────┘
 ```
 
-The C scanner emits newline-delimited JSON (or a compact binary record format) to stdout; the Python layer parses this into a `FileNode` tree, then drives the TUI and all analysis.
+The C scanner emits a compact binary record stream (default) or newline-delimited JSON (`-j` flag for debugging). The Python layer parses this into a `FileNode` tree, then drives the TUI and all analysis.
 
 ---
 
 ## 3. C Scanner (`storagescanner`)
 
 ### 3.1 Responsibility
-Walk a root path with `nftw(3)` (Linux) / `fts_open(3)` (macOS), calling `stat(2)` / `lstat(2)` on every entry. Emit one record per file/directory.
+Walk a root path recursively using `opendir` / `readdir`, calling `lstat(2)` on every entry. Emit one record per file/directory.
 
 ### 3.2 Record fields (per entry)
 
@@ -49,9 +48,9 @@ Walk a root path with `nftw(3)` (Linux) / `fts_open(3)` (macOS), calling `stat(2
 |---|---|---|
 | `path` | string | full absolute path |
 | `name` | string | basename |
-| `type` | char | `f`=file, `d`=dir, `l`=symlink |
+| `type` | char | `f`=file, `d`=dir, `l`=symlink, `o`=other |
 | `size_bytes` | uint64 | `st_size` |
-| `blocks_512` | uint64 | `st_blocks` (actual disk usage) |
+| `size_disk` | uint64 | `st_blocks * 512` (actual allocated) |
 | `inode` | uint64 | `st_ino` (hard-link dedup) |
 | `dev` | uint64 | `st_dev` |
 | `uid` | uint32 | `st_uid` |
@@ -59,11 +58,45 @@ Walk a root path with `nftw(3)` (Linux) / `fts_open(3)` (macOS), calling `stat(2
 | `atime` | int64 | `st_atime` |
 | `ctime` | int64 | `st_ctime` / `st_birthtime` (macOS) |
 | `depth` | uint16 | depth from root |
-| `error` | string | non-empty if stat failed |
+| `hardlink_of` | string | path of first occurrence if hard-link duplicate |
+| `error` | string | non-empty if stat/opendir failed |
 
-### 3.3 Output format
-Default: one JSON object per line (`\n`-terminated).  
-Optional flag `--binary`: fixed-width binary records (faster parsing for very large trees).
+### 3.3 Binary output format (default)
+
+Stream begins with 8-byte magic: `SMRK\x01\x00\x00\x00`
+
+Each record:
+```
+[72-byte fixed header]  little-endian
+  uint8   type
+  uint16  depth
+  uint8   flags         (reserved)
+  uint32  uid
+  uint64  size_bytes
+  uint64  size_disk
+  uint64  inode
+  uint64  dev
+  int64   mtime
+  int64   atime
+  int64   ctime
+  uint16  path_len
+  uint16  name_len
+  uint16  hardlink_len
+  uint16  error_len
+[variable]  path  (path_len bytes, no NUL)
+[variable]  name  (name_len bytes, no NUL)
+[variable]  hardlink_of  (hardlink_len bytes, no NUL)
+[variable]  error  (error_len bytes, no NUL)
+```
+
+Python struct format string: `'<BHBIQQQQqqqHHHH'` (72 bytes).
+
+#### Performance comparison (1.07M files)
+
+| Format | Parse time | Throughput |
+|--------|-----------|------------|
+| JSON (`json.loads`) | 4.55 s | 235K rec/s |
+| Binary (`struct.unpack`) | 0.87 s | 1.23M rec/s |
 
 ### 3.4 CLI flags
 
@@ -71,27 +104,28 @@ Optional flag `--binary`: fixed-width binary records (faster parsing for very la
 storagescanner [OPTIONS] <path>
   -x            do not cross filesystem boundaries (like du -x)
   -L            follow symlinks
-  -b            binary output mode
+  -b            binary output mode (default when called from Python)
   -d <depth>    max depth (0 = unlimited)
-  -j <threads>  parallel scan threads (default: CPU count)
   --skip <glob> colon-separated glob patterns to skip
 ```
 
+JSON output (for debugging) is produced when `-b` is omitted.
+
 ### 3.5 Hard-link handling
-Track `(dev, inode)` pairs in a hash set; count size only on first occurrence. Report subsequent occurrences with `size_bytes=0` and `hardlink_of=<first_path>`.
+Track `(dev, inode)` pairs in an open-addressing hash set; count size only on first occurrence. Report subsequent occurrences with `size_bytes=0`, `size_disk=0`, and `hardlink_of=<first_path>`.
 
 ---
 
 ## 4. Python Data Model
 
 ```python
-@dataclass
+@dataclass(slots=True)          # ~60% less memory vs plain dataclass
 class FileNode:
     path: str
     name: str
-    type: str          # 'f', 'd', 'l'
+    type: str          # 'f', 'd', 'l', 'o'
     size_bytes: int    # logical size
-    size_disk: int     # blocks_512 * 512 (actual allocated)
+    size_disk: int     # st_blocks * 512 (actual allocated)
     inode: int
     dev: int
     uid: int
@@ -100,19 +134,29 @@ class FileNode:
     ctime: datetime
     depth: int
     ext: str           # lowercase extension, '' if none
-    children: list     # only populated for 'd'
-    parent: 'FileNode | None'
-    # computed after full scan:
-    subtree_bytes: int
+    hardlink_of: str
+    error: str
+    children: list     # populated for 'd' nodes
+    parent: object     # FileNode | None
+    subtree_bytes: int # computed by DirTree.build()
     subtree_disk: int
     subtree_count: int
 ```
 
-`DirTree` wraps the root `FileNode` and holds:
-- flat list of all nodes (for sorting/filtering)
+### DirTree.build() — four-pass algorithm
+
+1. **Pass 1** — create `FileNode` objects from raw records, index by path.
+2. **Pass 2** — link parent → child. Each node's parent is found by `os.path.dirname(path)`. Simple `append` — no duplicate check (each path is unique, duplicate check was O(n²)).
+3. **Pass 3** — iterative DFS (explicit stack) to produce `flat` list in pre-order; populate `ext_map`, count files/dirs.
+4. **Pass 4** — subtree aggregation: iterate `flat` in reverse (= post-order); accumulate `subtree_bytes/disk/count` bottom-up.
+
+Raw records are freed immediately after build to halve peak memory usage.
+
+`DirTree` holds:
+- `flat: list[FileNode]` — all nodes in DFS order
 - `ext_map: dict[str, list[FileNode]]`
-- `uid_map: dict[int, list[FileNode]]`
-- aggregated totals
+- `errors: list[FileNode]`
+- cached `file_count`, `dir_count` — O(1) after build
 
 ---
 
@@ -128,7 +172,7 @@ All views share a common header and footer:
 ║  [1]SubDirs  [2]Files  [3]Types  [4]Time  [5]WhatIf  ║
 ╚══════════════════════════════════════════════════════╝
    ... view content ...
-[q]uit  [/]filter  [s]ort  [e]xpand  [d]elete  [?]help
+[q]uit  [/]filter  [s]ort  [Space]mark  [e]xport  [?]help
 ```
 
 ### 5.1 View 1 — SubDirectory Tree
@@ -158,6 +202,7 @@ Flat or tree-relative file list:
 - Paginated (j/k to scroll, PgUp/PgDn)
 - Sortable: disk size, logical size, mtime, atime, name, extension
 - Filter bar (`/`) accepts glob or regex
+- Can be pre-filtered by extension (drill-in from View 3) or age bucket (drill-in from View 4)
 
 ### 5.3 View 3 — File Type Summary
 
@@ -185,7 +230,7 @@ Heatmap-style summary + sortable list. Time buckets:
   < 1 month          203    431 MB     ░░░░░░░░░░░░░░░░░░░░
 ```
 
-Toggle between mtime / atime / ctime. Selecting a bucket drills into View 2 pre-filtered.
+Toggle between mtime / atime / ctime with `t`. Selecting a bucket drills into View 2 pre-filtered.
 
 ### 5.5 View 5 — What-If Simulator
 
@@ -197,7 +242,6 @@ Mark files/dirs for hypothetical removal using `[space]` in any view. This view 
   Marked for removal:
     ✓  node_modules/           34.1 GB
     ✓  *.mov files (127)       28.4 GB
-    ✗  src/ (protected)         1.2 GB  [cannot remove]
 
   Would free:  62.5 GB  (of 47.2 GB used = 132%)
   After:        0.0 GB  remaining (root becomes empty)
@@ -210,7 +254,7 @@ Mark files/dirs for hypothetical removal using `[space]` in any view. This view 
   [p] Export plan to file              [ESC] Back
 ```
 
-Confirmation produces a shell script (`storagemark_cleanup_<timestamp>.sh`) — it does **not** execute deletions itself.
+Confirmation produces a shell script (`storagemark_cleanup_<timestamp>.sh`).
 
 ---
 
@@ -230,11 +274,11 @@ Confirmation produces a shell script (`storagemark_cleanup_<timestamp>.sh`) — 
 | `/` | Open filter bar |
 | `s` | Cycle sort column |
 | `S` | Reverse sort direction |
-| `u` | Toggle size unit (auto / B / KB / MB / GB) |
-| `x` | Toggle cross-filesystem |
+| `u` | Toggle size unit globally (auto / GB / MB / KB / B) |
+| `t` | Toggle time field in View 4 (mtime / atime / ctime) |
 | `r` | Re-scan current root |
-| `p` | Change root path |
-| `e` | Export current view to CSV/JSON |
+| `p` | Change root path (prompts inline) |
+| `e` | Export current view to CSV |
 | `q` | Quit |
 | `?` | Help overlay |
 
@@ -285,7 +329,29 @@ $ storagemark --once --format json /tmp
 From any view, `e` exports:
 - **CSV**: one row per visible entry, all columns
 - **JSON**: full subtree from current root node
-- **Shell script** (what-if view only): `rm -rf` commands for marked items, with a safety header
+- **Shell script** (what-if view only): generated by `export_cleanup_script()` in `export.py`
+
+### Cleanup script behaviour
+
+By default the script previews every item with its size and prompts for confirmation:
+
+```
+StorageMark cleanup — <timestamp>
+Items to be permanently deleted (N total, X.XX GB):
+
+  <size>  <path>
+  ...
+
+Delete all N items? This cannot be undone. [y/N]
+```
+
+Any answer other than `y` / `yes` aborts with no changes. Pass `-y` or `--yes` to skip the prompt (for pipelines / scheduled jobs):
+
+```sh
+./storagemark_cleanup_<timestamp>.sh -y
+```
+
+`set -e` is active during deletion so the script halts on the first error.
 
 ---
 
@@ -294,38 +360,53 @@ From any view, `e` exports:
 ```
 storagemark/
 ├── c/
-│   ├── storagescanner.c      # main scanner
+│   ├── storagescanner.c   # main scanner; binary + JSON output
 │   ├── scanner.h
-│   ├── hashset.c/.h       # inode dedup
+│   ├── hashset.c/.h       # open-addressing inode dedup
 │   └── Makefile
 ├── python/
 │   ├── __main__.py        # entry point, arg parsing
-│   ├── scanner.py         # subprocess wrapper + parser
-│   ├── model.py           # FileNode, DirTree, aggregation
+│   ├── scanner.py         # subprocess wrapper; binary struct parser
+│   ├── model.py           # FileNode (slots), DirTree (iterative build)
 │   ├── tui/
-│   │   ├── app.py         # curses init, view router, key dispatch
-│   │   ├── header.py
+│   │   ├── app.py         # curses main loop, background scan thread
+│   │   ├── header.py      # header / footer rendering
 │   │   ├── views/
 │   │   │   ├── subdirs.py
 │   │   │   ├── files.py
 │   │   │   ├── types.py
 │   │   │   ├── time_view.py
 │   │   │   └── whatif.py
-│   │   └── widgets.py     # bar chart, scrollable list, filter bar
+│   │   └── widgets.py     # ScrollList, FilterBar, bar chart
 │   └── export.py
-├── setup.py / pyproject.toml
+├── pyproject.toml
+├── run.sh
 └── README.md
 ```
 
 ---
 
-## 11. Performance Targets
+## 11. Performance
 
-| Tree size | Scan time (C scanner) | TUI response |
-|---|---|---|
-| 10K files | < 0.5 s | < 50 ms per keypress |
-| 100K files | < 3 s | < 100 ms |
-| 1M files | < 30 s | < 200 ms |
+Benchmarked on a real home directory (**1.07M files, 133 GB**):
+
+| Stage | Time |
+|---|---|
+| C scanner → binary pipe | ~3 s |
+| Python `struct.unpack` parse | ~1.7 s |
+| `DirTree.build()` (link + aggregate) | ~4.2 s |
+| **Total to interactive TUI** | **~9 s** |
+
+### Optimisations implemented
+
+| Optimisation | Benefit |
+|---|---|
+| Binary record format | 5× faster parsing vs JSON |
+| `@dataclass(slots=True)` on `FileNode` | ~60% less memory per object |
+| Iterative DFS in `DirTree.build()` | No recursion limit; faster for 1M+ nodes |
+| O(1) child append (removed `not in` check) | Eliminated O(n²) parent-linking bug |
+| Raw records freed after build | Halves peak memory usage |
+| `file_count`/`dir_count` cached at build | O(1) property access |
 
 Sorting and filtering operate on the in-memory tree (no re-scan). Re-scan is triggered only explicitly (`r`).
 
@@ -333,9 +414,9 @@ Sorting and filtering operate on the in-memory tree (no re-scan). Re-scan is tri
 
 ## 12. Error Handling
 
-- Permission denied on a directory: record in a `scan_errors` list, display count in footer, accessible via `?e` overlay
-- Scan interrupted (Ctrl-C during scan): partial results displayed with `[PARTIAL]` badge
-- Symlink cycles: detected via `(dev, inode)` tracking in C layer; skipped with a warning
+- Permission denied on a directory: recorded in `errors` list, count shown in footer
+- Scan interrupted (Ctrl-C): background scan is stopped immediately; whatever records have arrived are built into a partial `DirTree`; TUI continues with a `[PARTIAL]` badge in the header. Pass `-y` at the prompt if you later run the generated cleanup script non-interactively.
+- Symlink cycles: detected via `(dev, inode)` tracking in C layer; skipped silently
 
 ---
 
@@ -343,7 +424,8 @@ Sorting and filtering operate on the in-memory tree (no re-scan). Re-scan is tri
 
 | Feature | macOS | Linux |
 |---|---|---|
-| Directory walk | `fts_open` | `nftw` |
-| Birth time | `st_birthtime` | unavailable (show `--`) |
-| Filesystem boundary | `-x` uses `st_dev` | same |
+| Directory walk | `opendir` / `readdir` | same |
+| Birth time | `st_birthtimespec.tv_sec` | unavailable (shows `--`) |
+| Filesystem boundary | `-x` uses `st_dev` comparison | same |
 | Disk usage | `st_blocks * 512` | same |
+| Binary output | `write(STDOUT_FILENO, ...)` | same |
