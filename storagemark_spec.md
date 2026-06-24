@@ -379,10 +379,30 @@ storagemark/
 │   │   │   └── whatif.py
 │   │   └── widgets.py     # ScrollList, FilterBar, bar chart
 │   └── export.py
-├── pyproject.toml
-├── run.sh
+├── storagemark/__init__.py  # package marker, __version__
+├── setup.py                 # build hook: compiles C scanner at build time
+├── pyproject.toml           # uv / setuptools metadata, package-data
+├── uv.lock
+├── run.sh                   # dev launcher (uv run)
 └── README.md
 ```
+
+### Packaging & distribution
+
+Distributed as a **uv tool**. End users install with:
+
+```sh
+uv tool install git+https://github.com/markus-wolf/FileManager
+uv tool upgrade storagemark      # update
+```
+
+- uv provides an isolated Python 3.13 automatically (no system Python needed).
+- `setup.py` defines a custom `build_py` that compiles `storagescanner` from C
+  during the wheel build; the binary and the C sources are shipped as
+  `package-data` under `storagemark/c/`.
+- If no compiler is available at build time, the build warns but does not fail;
+  `scanner.py:_compile_scanner()` recompiles from the shipped sources on first
+  run (uv-tool environments are user-writable).
 
 ---
 

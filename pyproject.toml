@@ -1,13 +1,21 @@
 [build-system]
-requires = ["setuptools>=42"]
+requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "storagemark"
 version = "0.1.0"
-description = "Interactive terminal disk space analyzer"
+description = "Interactive terminal disk space analyzer for macOS and Linux"
+readme = "README.md"
 requires-python = ">=3.13"
+license = { text = "MIT" }
+authors = [{ name = "Markus Wolf" }]
+keywords = ["disk", "storage", "tui", "curses", "du", "cleanup"]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/markus-wolf/FileManager"
+Repository = "https://github.com/markus-wolf/FileManager"
 
 [project.scripts]
 storagemark = "storagemark.python.__main__:main"
@@ -15,3 +23,12 @@ storagemark = "storagemark.python.__main__:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["storagemark*"]
+
+# Ship the compiled scanner AND its sources (so the runtime fallback in
+# scanner.py can recompile if the prebuilt binary is missing).
+[tool.setuptools.package-data]
+storagemark = ["c/storagescanner", "c/*.c", "c/*.h", "c/Makefile"]
+
+# Runtime has zero dependencies. Add dev tools here if needed:
+# [dependency-groups]
+# dev = []

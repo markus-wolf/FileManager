@@ -1,8 +1,9 @@
 #!/bin/sh
+# Dev launcher. Uses uv to manage the environment.
+# For end-user install, see README (uv tool install).
 set -e
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
-VENV="$DIR/.venv/bin/python"
 SCANNER="$DIR/storagemark/c/storagescanner"
 
 # Build C scanner if missing or stale
@@ -14,4 +15,4 @@ fi
 ROOT="${1:-.}"
 shift 2>/dev/null || true
 
-exec "$VENV" -m storagemark.python "$ROOT" "$@"
+exec uv run --project "$DIR" python -m storagemark.python "$ROOT" "$@"

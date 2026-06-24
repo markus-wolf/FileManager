@@ -6,29 +6,73 @@ Traverses a directory tree using a fast C scanner and presents results through a
 
 ---
 
-## Requirements
+## Install (macOS / Linux)
 
-- macOS or Linux
-- Python 3.13 (via pyenv)
-- C compiler (`cc`)
+StorageMark installs as a [uv](https://docs.astral.sh/uv/) tool. uv manages its
+own isolated Python — you do **not** need a system Python, pyenv, or a venv.
+
+**1. Install uv** (once per machine):
+
+```sh
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+**2. Install StorageMark:**
+
+```sh
+uv tool install git+https://github.com/markus-wolf/FileManager
+```
+
+That builds the C scanner and puts a `storagemark` command on your `PATH`
+(usually `~/.local/bin`). Now run it from anywhere:
+
+```sh
+storagemark ~
+```
+
+### Updating
+
+```sh
+uv tool upgrade storagemark
+```
+
+### Uninstalling
+
+```sh
+uv tool uninstall storagemark
+```
+
+> **Note on the C scanner.** The fast scanner is compiled from C at install
+> time, which needs Xcode Command Line Tools on macOS (`xcode-select --install`).
+> If a compiler isn't available during install, StorageMark compiles the scanner
+> automatically the first time you run it. No compiler ever needed if a working
+> binary is already present.
 
 ---
 
-## Setup
+## Requirements
+
+- macOS (tested on 15.7 and 26) or Linux
+- uv (which provides Python 3.13 automatically)
+- A C compiler — Xcode Command Line Tools on macOS (`cc` / `clang`)
+
+---
+
+## Development
 
 ```sh
-git clone <repo>
+git clone https://github.com/markus-wolf/FileManager
 cd FileManager
 
-# Create virtualenv and install
-python -m venv .venv
-.venv/bin/pip install -e .
-
-# Build the C scanner
-make -C storagemark/c
+uv sync          # creates .venv, builds the C scanner via the build hook
+uv run storagemark ~
 ```
 
-Or just use `run.sh` — it builds the scanner automatically if needed.
+Or use the dev launcher, which rebuilds the C scanner if its source changed:
+
+```sh
+./run.sh ~
+```
 
 ---
 

@@ -121,16 +121,47 @@ def _stream_json(
 # Public API                                                           #
 # ------------------------------------------------------------------ #
 
+_C_DIR = Path(__file__).parent.parent / "c"
+
+
+def _compile_scanner(out_path: Path) -> bool:
+    """Compile the C scanner from shipped sources into out_path.
+
+    Returns True on success. Used as a runtime fallback when the
+    prebuilt binary is absent (e.g. Xcode CLT wasn't available at
+    install time). uv-tool environments are user-writable, so this
+    normally succeeds the first time the tool is run.
+    """
+    sources = [_C_DIR / "storagescanner.c", _C_DIR / "hashset.c"]
+    if not all(s.exists() for s in sources):
+        return False
+    cc = os.environ.get("CC", "cc")
+    cmd = [cc, "-O2", "-std=c11", "-o", str(out_path), *map(str, sources)]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True)
+    except (subprocess.CalledProcessError, FileNotFoundError, OSError):
+        return False
+    return out_path.exists() and os.access(out_path, os.X_OK)
+
+
 def _find_scanner() -> str:
     candidates = [
-        Path(__file__).parent.parent / "c" / "storagescanner",
+        _C_DIR / "storagescanner",
         Path("/usr/local/bin/storagescanner"),
     ]
     for c in candidates:
         if c.exists() and os.access(c, os.X_OK):
             return str(c)
+
+    # Fallback: try compiling from the shipped C sources.
+    target = _C_DIR / "storagescanner"
+    if _compile_scanner(target):
+        return str(target)
+
     raise FileNotFoundError(
-        "storagescanner binary not found. Run: make -C storagemark/c"
+        "storagescanner binary not found and could not be compiled.\n"
+        "Install Xcode Command Line Tools, then re-run:\n"
+        "    xcode-select --install"
     )
 
 
