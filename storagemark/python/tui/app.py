@@ -44,6 +44,8 @@ class App:
         self._view_idx = start_view
         self._views: dict[int, object] = {}
         self._help_open = False
+        self._errors_open = False
+        self._errors_scroll = 0
         self._unit = "auto"
         self._scan_error: str | None = None
         self._scan_last_path = ""
@@ -186,10 +188,14 @@ class App:
                         safe_addstr(stdscr, view_y + 1 + i, 0,
                                     truncate(ln, w), curses.color_pair(6))
 
-                draw_footer(stdscr, h, w)
+                n_err = len(self._tree.errors) if self._tree else 0
+                draw_footer(stdscr, h, w,
+                            extra=f"[E]rrors({n_err})" if n_err else "")
 
                 if self._help_open:
                     self._draw_help(stdscr, h, w)
+                if self._errors_open:
+                    self._draw_errors(stdscr, view_y, view_h, w)
 
                 stdscr.refresh()
 
@@ -213,11 +219,28 @@ class App:
                     self._help_open = False
                     continue
 
+                # Errors overlay is modal: scroll with j/k, dismiss with Esc/E/q
+                if self._errors_open:
+                    n_err = len(self._tree.errors) if self._tree else 0
+                    if key in (27, ord('E'), ord('q')):
+                        self._errors_open = False
+                    elif key in (ord('j'), curses.KEY_DOWN):
+                        self._errors_scroll = min(max(0, n_err - 1),
+                                                  self._errors_scroll + 1)
+                    elif key in (ord('k'), curses.KEY_UP):
+                        self._errors_scroll = max(0, self._errors_scroll - 1)
+                    continue
+
                 # Global keys
                 if key == ord('q'):
                     break
                 elif key == ord('?'):
                     self._help_open = True
+                    continue
+                elif key == ord('E'):
+                    if self._tree and self._tree.errors:
+                        self._errors_open = True
+                        self._errors_scroll = 0
                     continue
                 elif key in (ord('1'), ord('2'), ord('3'), ord('4'), ord('5')):
                     new_idx = key - ord('0')
@@ -320,6 +343,7 @@ class App:
             "  r          Re-scan current root",
             "  p          Change root path",
             "  e          Export current view to CSV",
+            "  E          Show scan errors",
             "  q          Quit",
             "  ?          This help   [any key] close",
         ]
@@ -330,6 +354,25 @@ class App:
         for i, line in enumerate(lines):
             attr = curses.color_pair(5) if i == 0 else 0
             safe_addstr(stdscr, by + i + 1, bx, truncate(line, bw), attr)
+
+    def _draw_errors(self, stdscr, view_y, view_h, w):
+        errs = self._tree.errors if self._tree else []
+        # Clear the view area
+        for row in range(view_h):
+            stdscr.move(view_y + row, 0)
+            stdscr.clrtoeol()
+        title = f"  Scan errors ({len(errs)})   [j/k] scroll   [Esc] close"
+        safe_addstr(stdscr, view_y, 0, truncate(title, w), curses.color_pair(4))
+
+        body_h = view_h - 2
+        start = self._errors_scroll
+        for i, node in enumerate(errs[start:start + body_h]):
+            y = view_y + 1 + i
+            safe_addstr(stdscr, y, 0,
+                        truncate(f"  {node.error}", w), curses.color_pair(6))
+            safe_addstr(stdscr, y, min(w - 1, 40),
+                        truncate("  " + node.path, max(1, w - 40)),
+                        curses.color_pair(2))
 
 
 def _ensure_terminfo():

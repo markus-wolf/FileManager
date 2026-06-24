@@ -201,8 +201,28 @@ Or use the dev launcher, which rebuilds the C scanner if its source changed:
 | `r` | Re-scan current root |
 | `p` | Change root path |
 | `e` | Export current view to CSV |
+| `E` | Show scan errors (when any) |
 | `q` | Quit |
 | `?` | Help overlay |
+
+---
+
+## Scan errors
+
+The header shows an error count (`Errors: N`) for paths that couldn't be
+stat'd or opened — usually permission-denied folders macOS protects, even for
+your own account. When there are any, the footer shows **`[E]rrors(N)`**.
+
+Press **`E`** to open a scrollable list of every failed path with its error
+message (`j`/`k` to scroll, `Esc` to close). Errored entries simply contribute
+0 bytes to the totals; the rest of the scan is unaffected.
+
+To see them outside the TUI, export to CSV and filter the `error` column:
+
+```sh
+storagemark ~ --once --format csv > /tmp/sm.csv
+python3 -c "import csv; [print(r['error'],'→',r['path']) for r in csv.DictReader(open('/tmp/sm.csv')) if r['error']]"
+```
 
 ---
 
