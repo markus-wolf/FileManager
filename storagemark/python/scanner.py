@@ -4,6 +4,7 @@ import json
 import os
 import struct
 import subprocess
+import sys
 from pathlib import Path
 from typing import Iterator, Callable
 
@@ -124,16 +125,34 @@ def _stream_json(
 _C_DIR = Path(__file__).parent.parent / "c"
 
 
+def _user_cache_dir() -> Path:
+    """Per-user, writable location for a compiled scanner.
+
+    Needed for all-users (sudo) installs where the package dir under
+    /opt/uv is root-owned and read-only for the user running the tool.
+    """
+    if sys.platform == "darwin":
+        base = Path.home() / "Library" / "Caches"
+    else:
+        base = Path(os.environ.get("XDG_CACHE_HOME") or (Path.home() / ".cache"))
+    return base / "storagemark"
+
+
 def _compile_scanner(out_path: Path) -> bool:
     """Compile the C scanner from shipped sources into out_path.
 
     Returns True on success. Used as a runtime fallback when the
     prebuilt binary is absent (e.g. Xcode CLT wasn't available at
-    install time). uv-tool environments are user-writable, so this
-    normally succeeds the first time the tool is run.
+    install time).
     """
     sources = [_C_DIR / "storagescanner.c", _C_DIR / "hashset.c"]
     if not all(s.exists() for s in sources):
+        return False
+    try:
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return False
+    if not os.access(out_path.parent, os.W_OK):
         return False
     cc = os.environ.get("CC", "cc")
     cmd = [cc, "-O2", "-std=c11", "-o", str(out_path), *map(str, sources)]
@@ -145,18 +164,21 @@ def _compile_scanner(out_path: Path) -> bool:
 
 
 def _find_scanner() -> str:
+    cache_bin = _user_cache_dir() / "storagescanner"
     candidates = [
-        _C_DIR / "storagescanner",
+        _C_DIR / "storagescanner",          # prebuilt / dev / per-user install
+        cache_bin,                          # previously self-compiled (this user)
         Path("/usr/local/bin/storagescanner"),
     ]
     for c in candidates:
         if c.exists() and os.access(c, os.X_OK):
             return str(c)
 
-    # Fallback: try compiling from the shipped C sources.
-    target = _C_DIR / "storagescanner"
-    if _compile_scanner(target):
-        return str(target)
+    # Fallback: compile from shipped C sources. Prefer the package dir;
+    # if it is read-only (shared all-users install), use the user cache.
+    for target in (_C_DIR / "storagescanner", cache_bin):
+        if _compile_scanner(target):
+            return str(target)
 
     raise FileNotFoundError(
         "storagescanner binary not found and could not be compiled.\n"

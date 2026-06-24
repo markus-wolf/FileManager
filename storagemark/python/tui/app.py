@@ -45,6 +45,7 @@ class App:
         self._views: dict[int, object] = {}
         self._help_open = False
         self._unit = "auto"
+        self._scan_error: str | None = None
 
     # ------------------------------------------------------------------ #
     # Scanning (background thread)                                         #
@@ -52,16 +53,19 @@ class App:
 
     def _scan_thread(self):
         t0 = time.time()
+        self._scan_error = None
         try:
             for rec in stream_records(self._root, **self._scanner_kwargs):
                 self._records.append(rec)
-        except Exception:
+        except Exception as e:
             self._partial = True
+            self._scan_error = str(e)
         self._scan_time = time.time() - t0
         try:
             self._tree = DirTree.build(self._records)
-        except Exception:
-            pass
+        except Exception as e:
+            if not self._scan_error:
+                self._scan_error = str(e)
         finally:
             self._records.clear()   # free raw dicts — tree owns the data now
         self._scan_done.set()
@@ -152,6 +156,19 @@ class App:
                     msg = f"  Scanning {self._root}{dots}  ({len(self._records):,} records)"
                     safe_addstr(stdscr, view_y + view_h // 2, 0,
                                 truncate(msg, w), curses.color_pair(1))
+                else:
+                    # Scan finished but produced no usable tree — show why,
+                    # rather than freezing on the stale "Scanning…" line.
+                    for row in range(view_h):
+                        stdscr.move(view_y + row, 0)
+                        stdscr.clrtoeol()
+                    err = self._scan_error or "Scan produced no records."
+                    lines = ["  Scan failed:", ""] + [
+                        "    " + ln for ln in err.splitlines()
+                    ] + ["", "  [r] retry   [p] change path   [q] quit"]
+                    for i, ln in enumerate(lines):
+                        safe_addstr(stdscr, view_y + 1 + i, 0,
+                                    truncate(ln, w), curses.color_pair(6))
 
                 draw_footer(stdscr, h, w)
 
