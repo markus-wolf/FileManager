@@ -48,7 +48,13 @@ def _parse_threshold(s: str | None) -> int:
 
 
 def once_text(tree: DirTree, root: str):
-    print(f"\nStorageMark — {root}")
+    import socket
+    try:
+        host = socket.gethostname().split(".")[0]
+    except Exception:
+        host = ""
+    location = f"{host}:{root}" if host else root
+    print(f"\nStorageMark — {location}")
     print(f"  Total disk:  {fmt_size(tree.total_disk).strip()}")
     print(f"  Total bytes: {fmt_size(tree.total_bytes).strip()}")
     print(f"  Files:       {tree.file_count:,}")
