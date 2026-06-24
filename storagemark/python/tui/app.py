@@ -316,9 +316,44 @@ class App:
             safe_addstr(stdscr, by + i + 1, bx, truncate(line, bw), attr)
 
 
+def _ensure_terminfo():
+    """Help ncurses find the terminal capability database.
+
+    Some Python builds (Homebrew, ServBay, python-build-standalone, etc.)
+    ship a _curses whose compiled-in terminfo search path doesn't exist on
+    the host, causing `setupterm: could not find terminfo database`. If the
+    user hasn't set TERMINFO/TERMINFO_DIRS, point it at standard locations
+    that actually exist before curses initialises.
+    """
+    if os.environ.get("TERMINFO") or os.environ.get("TERMINFO_DIRS"):
+        return
+    candidates = [
+        "/usr/share/terminfo",   # macOS, most Linux
+        "/lib/terminfo",         # Debian/Ubuntu
+        "/etc/terminfo",         # user-local on some distros
+        "/usr/lib/terminfo",
+    ]
+    existing = [p for p in candidates if os.path.isdir(p)]
+    if existing:
+        os.environ["TERMINFO_DIRS"] = ":".join(existing)
+    if not os.environ.get("TERM"):
+        os.environ["TERM"] = "xterm-256color"
+
+
 def run_tui(root: str, start_view: int = 1, scanner_kwargs: dict | None = None):
+    _ensure_terminfo()
     app = App(root, start_view, scanner_kwargs)
     try:
         curses.wrapper(app.run)
     except KeyboardInterrupt:
         pass   # terminal already restored by curses.wrapper; exit silently
+    except curses.error as e:
+        sys.stderr.write(
+            f"\nStorageMark could not start the terminal UI: {e}\n\n"
+            "This is usually a terminfo problem with the Python build in use.\n"
+            "Try:\n"
+            "    TERMINFO_DIRS=/usr/share/terminfo storagemark <path>\n"
+            "or run the non-interactive summary instead:\n"
+            "    storagemark --once <path>\n"
+        )
+        sys.exit(1)
