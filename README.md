@@ -50,6 +50,70 @@ uv tool uninstall storagemark
 
 ---
 
+## Install for all users (shared Mac)
+
+The default `uv tool install` is **per-user**. To make `storagemark` available
+to every account on a Mac, redirect uv's directories to shared, world-readable
+locations and run the install as admin.
+
+**Prereqs (once per machine):**
+
+```sh
+xcode-select --install     # C compiler, so the scanner builds for everyone
+brew install uv            # uv available outside any single user's home
+```
+
+**Install system-wide** (run from an admin account):
+
+```sh
+sudo -H env \
+  UV_TOOL_DIR=/opt/uv/tools \
+  UV_TOOL_BIN_DIR=/usr/local/bin \
+  UV_PYTHON_INSTALL_DIR=/opt/uv/python \
+  UV_CACHE_DIR=/opt/uv/cache \
+  /opt/homebrew/bin/uv tool install --managed-python --python 3.13 \
+  git+https://github.com/markus-wolf/FileManager
+
+sudo chmod -R a+rX /opt/uv /usr/local/bin/storagemark
+```
+
+Every user now gets `storagemark` because `/usr/local/bin` is on the default
+PATH. Verify from a non-admin account with `storagemark ~`.
+
+**Why each setting matters:**
+
+| Setting | Purpose |
+|---------|---------|
+| `sudo -H` | Use root's HOME so uv doesn't write into the admin's `~/.cache` |
+| `UV_TOOL_BIN_DIR=/usr/local/bin` | the `storagemark` command — already on everyone's PATH |
+| `UV_TOOL_DIR=/opt/uv/tools` | the tool's isolated venv — shared, not under a home dir |
+| `UV_PYTHON_INSTALL_DIR=/opt/uv/python` | the Python the venv uses — must be world-readable |
+| `UV_CACHE_DIR=/opt/uv/cache` | build cache — keeps it out of any user's home |
+| `--managed-python` | use uv's own Python, not a stray one on PATH (avoids odd `_curses`/terminfo builds) |
+| `chmod -R a+rX` | open read+execute to all (sudo creates everything root-owned) |
+
+**Updating later** (same env vars):
+
+```sh
+sudo -H env UV_TOOL_DIR=/opt/uv/tools UV_TOOL_BIN_DIR=/usr/local/bin \
+  UV_PYTHON_INSTALL_DIR=/opt/uv/python UV_CACHE_DIR=/opt/uv/cache \
+  /opt/homebrew/bin/uv tool upgrade storagemark
+sudo chmod -R a+rX /opt/uv
+```
+
+> If `which uv` reports a path other than `/opt/homebrew/bin/uv`, substitute it
+> in the commands above. On Apple Silicon with Homebrew it is `/opt/homebrew/bin/uv`.
+
+### Troubleshooting
+
+| Symptom | Cause / fix |
+|---------|-------------|
+| Stuck on "Scanning… (0 records)" | Scanner wasn't built and the shared dir is read-only. Run `storagemark ~ --once` to see the error; install Xcode CLT and reinstall as admin. |
+| `Failed to initialize cache … Permission denied` | A previous `sudo` install wrote root-owned files into your `~/.cache/uv`. Fix: `sudo chown -R "$(whoami)" ~/.cache/uv` (or `sudo rm -rf ~/.cache/uv`). Use `sudo -H` + `UV_CACHE_DIR` to avoid it. |
+| `could not find terminfo database` | Unusual Python build (e.g. ServBay). Workaround: `TERMINFO_DIRS=/usr/share/terminfo storagemark ~`. Reinstalling with `--managed-python` (above) avoids it. |
+
+---
+
 ## Requirements
 
 - macOS (tested on 15.7 and 26) or Linux
