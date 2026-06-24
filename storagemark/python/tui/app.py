@@ -46,6 +46,7 @@ class App:
         self._help_open = False
         self._unit = "auto"
         self._scan_error: str | None = None
+        self._scan_last_path = ""
 
     # ------------------------------------------------------------------ #
     # Scanning (background thread)                                         #
@@ -54,9 +55,11 @@ class App:
     def _scan_thread(self):
         t0 = time.time()
         self._scan_error = None
+        self._scan_last_path = ""
         try:
             for rec in stream_records(self._root, **self._scanner_kwargs):
                 self._records.append(rec)
+                self._scan_last_path = rec.get("path", "")
         except Exception as e:
             self._partial = True
             self._scan_error = str(e)
@@ -153,9 +156,22 @@ class App:
                     view.draw(stdscr, view_y, 0, view_h, w)
                 elif not self._scan_done.is_set():
                     dots = "." * (int(time.time() * 2) % 4)
-                    msg = f"  Scanning {self._root}{dots}  ({len(self._records):,} records)"
-                    safe_addstr(stdscr, view_y + view_h // 2, 0,
-                                truncate(msg, w), curses.color_pair(1))
+                    n = len(self._records)
+                    cy = view_y + view_h // 2
+                    msg = f"  Scanning {self._root}{dots}  ({n:,} records)"
+                    safe_addstr(stdscr, cy, 0, truncate(msg, w), curses.color_pair(1))
+                    # Show the path currently being walked, so a slow subtree
+                    # (network mount, iCloud, sleeping disk) is visible rather
+                    # than looking like a freeze.
+                    cur = self._scan_last_path
+                    if cur:
+                        safe_addstr(stdscr, cy + 1, 0,
+                                    truncate("  at: " + cur, w), curses.color_pair(2))
+                        safe_addstr(stdscr, cy + 3, 0,
+                                    truncate("  Stuck here? Ctrl-C for partial "
+                                             "results, then retry with -x or "
+                                             "--skip <name>.", w),
+                                    curses.color_pair(2))
                 else:
                     # Scan finished but produced no usable tree — show why,
                     # rather than freezing on the stale "Scanning…" line.

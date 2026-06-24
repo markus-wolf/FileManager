@@ -111,6 +111,7 @@ sudo chmod -R a+rX /opt/uv
 | Stuck on "Scanning… (0 records)" | Scanner wasn't built and the shared dir is read-only. Run `storagemark ~ --once` to see the error; install Xcode CLT and reinstall as admin. |
 | `Failed to initialize cache … Permission denied` | A previous `sudo` install wrote root-owned files into your `~/.cache/uv`. Fix: `sudo chown -R "$(whoami)" ~/.cache/uv` (or `sudo rm -rf ~/.cache/uv`). Use `sudo -H` + `UV_CACHE_DIR` to avoid it. |
 | `could not find terminfo database` | Unusual Python build (e.g. ServBay). Workaround: `TERMINFO_DIRS=/usr/share/terminfo storagemark ~`. Reinstalling with `--managed-python` (above) avoids it. |
+| Scan races ahead then crawls (a few records/min) | A slow subtree — usually a network mount (NAS/SMB), iCloud Drive (`~/Library/Mobile Documents`), or a sleeping external disk. The scanning screen shows the current path (`at: …`). Ctrl-C for partial results, then retry with `-x` (skip other volumes) or `--skip "<name>"` (skip a same-volume folder like iCloud), or scan a specific subfolder. To find the culprit live: `pgrep storagescanner \| xargs -I{} sudo lsof -p {} \| tail`. |
 
 ---
 

@@ -9,6 +9,9 @@
 #include <unistd.h>
 #include <fnmatch.h>
 #include <time.h>
+#ifdef __APPLE__
+#include <sys/resource.h>   /* setiopolicy_np, dataless-file I/O policy */
+#endif
 #include "hashset.h"
 
 /* ------------------------------------------------------------------ */
@@ -288,6 +291,17 @@ static void usage(const char *prog) {
 
 int main(int argc, char **argv) {
     char *root = NULL;
+
+#if defined(__APPLE__) && defined(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES)
+    /* Don't pull cloud files down while scanning. With "Optimize Mac Storage",
+       iCloud/CloudStorage files may be dataless placeholders; touching them can
+       trigger a download and make the walk crawl (or quietly fetch GBs). Tell
+       the kernel not to materialise dataless files for this process — we only
+       need their on-disk metadata. */
+    setiopolicy_np(IOPOL_TYPE_VFS_MATERIALIZE_DATALESS_FILES,
+                   IOPOL_SCOPE_PROCESS,
+                   IOPOL_MATERIALIZE_DATALESS_FILES_OFF);
+#endif
 
     for (int i = 1; i < argc; i++) {
         if      (strcmp(argv[i], "-x") == 0)  opt_one_fs = 1;
