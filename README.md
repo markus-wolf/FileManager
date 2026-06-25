@@ -139,6 +139,32 @@ Or use the dev launcher, which rebuilds the C scanner if its source changed:
 ./run.sh ~
 ```
 
+### Releasing a new version
+
+The version lives in **one** place — `storagemark/__init__.py` — and
+`pyproject.toml` reads it dynamically. Check it any time with:
+
+```sh
+storagemark --version
+```
+
+To cut a release, use `bump.py`. It updates the version, commits, and creates
+an annotated `v<version>` git tag in one step:
+
+```sh
+./bump.py patch          # 0.1.0 -> 0.1.1
+./bump.py minor          # 0.1.0 -> 0.2.0
+./bump.py major          # 0.1.0 -> 1.0.0
+./bump.py 1.4.0          # set an explicit version
+
+./bump.py patch --dry-run   # preview only, change nothing
+./bump.py patch --push      # also push the commit and tag to origin
+```
+
+Without `--push` it prints the exact `git push` commands to publish. End users
+then get the new version with `uv tool upgrade storagemark` (uv installs from
+the default branch; pushing the tag just marks the release).
+
 ---
 
 ## Usage

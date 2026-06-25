@@ -11,10 +11,13 @@ from .export  import export_csv, export_json
 
 
 def parse_args():
+    from .. import __version__
     p = argparse.ArgumentParser(
         prog="storagemark",
         description="Interactive disk space analyzer",
     )
+    p.add_argument("--version", action="version",
+                   version=f"storagemark {__version__}")
     p.add_argument("path", nargs="?", default=".",
                    help="Root path to scan (default: current directory)")
     p.add_argument("-o", "--once", action="store_true",

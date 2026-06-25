@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "storagemark"
-version = "0.1.0"
+dynamic = ["version"]          # single source of truth: storagemark/__init__.py
 description = "Interactive terminal disk space analyzer for macOS and Linux"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -12,6 +12,9 @@ license = { text = "MIT" }
 authors = [{ name = "Markus Wolf" }]
 keywords = ["disk", "storage", "tui", "curses", "du", "cleanup"]
 dependencies = []
+
+[tool.setuptools.dynamic]
+version = { attr = "storagemark.__version__" }
 
 [project.urls]
 Homepage = "https://github.com/markus-wolf/FileManager"

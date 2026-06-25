@@ -379,13 +379,22 @@ storagemark/
 │   │   │   └── whatif.py
 │   │   └── widgets.py     # ScrollList, FilterBar, bar chart
 │   └── export.py
-├── storagemark/__init__.py  # package marker, __version__
+├── storagemark/__init__.py  # package marker + __version__ (single version source)
 ├── setup.py                 # build hook: compiles C scanner at build time
-├── pyproject.toml           # uv / setuptools metadata, package-data
+├── pyproject.toml           # uv / setuptools metadata; version read dynamically
 ├── uv.lock
+├── bump.py                  # bump version + commit + create v<x> git tag
 ├── run.sh                   # dev launcher (uv run)
 └── README.md
 ```
+
+### Versioning & releases
+
+`storagemark/__init__.py:__version__` is the single source of truth;
+`pyproject.toml` declares `dynamic = ["version"]` and reads it via
+`[tool.setuptools.dynamic]`. `storagemark --version` prints it. `bump.py`
+(`patch|minor|major|X.Y.Z`, `--push`, `--dry-run`) edits that one file,
+commits "Release vX.Y.Z", and creates an annotated `vX.Y.Z` tag.
 
 ### Packaging & distribution
 
