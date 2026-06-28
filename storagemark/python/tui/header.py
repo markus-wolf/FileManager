@@ -2,6 +2,7 @@ from __future__ import annotations
 import curses
 import socket
 import time
+from ... import __version__
 from ..model import DirTree, fmt_size
 from .widgets import safe_addstr, truncate
 
@@ -21,9 +22,14 @@ def draw_header(win, tree: DirTree | None, root: str, scan_time: float,
     scan_s = f"{scan_time:.1f}s" if scan_time else "scanning…"
     location = f"{HOSTNAME}:{root}" if HOSTNAME else root
     line1 = f" StorageMark  {status}{location}    Scanned: {scan_s}"
+    ver = f"v{__version__} "
+    vlen = len(ver)
     win.move(0, 0)
     win.clrtoeol()
-    safe_addstr(win, 0, 0, truncate(line1, width), curses.color_pair(1) | curses.A_BOLD)
+    attr = curses.color_pair(1) | curses.A_BOLD
+    # Left side, leaving room for the right-aligned version.
+    safe_addstr(win, 0, 0, truncate(line1, max(0, width - vlen)), attr)
+    safe_addstr(win, 0, max(0, width - vlen), ver, attr)
 
     if tree:
         line2 = (f" Total: {fmt_size(tree.total_disk).strip()}  "
