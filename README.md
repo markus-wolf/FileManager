@@ -214,15 +214,18 @@ the default branch; pushing the tag just marks the release).
 
 | Key | Action |
 |-----|--------|
-| `1`–`5` | Switch view |
+| `1`–`5` | Switch view (tabs are also mouse-clickable) |
 | `j` / `k` | Move cursor down / up |
 | `PgDn` / `PgUp` | Page down / up |
 | `g` / `G` | Jump to top / bottom |
 | `Enter` | Expand directory or drill into selection |
-| `Space` | Toggle what-if mark |
+| `Space` | Mark / unmark — a file, a directory subtree, a whole extension (Types), or an age bucket (Time) |
+| `A` | Mark **all** rows matching the current filter (Files view) |
+| `x` | Clear all marks |
+| `D` | Remove marked items (Trash or permanent — see below) |
 | `/` | Filter (glob or `~regex`, prefix `!` to invert) |
 | `s` / `S` | Cycle sort column / reverse sort |
-| `u` | Toggle size unit (auto / GB / MB / KB / B) — works in all views |
+| `u` | Toggle size unit (auto / GB / MB / KB / B) |
 | `t` | Toggle time field in Time view (mtime / atime / ctime) |
 | `r` | Re-scan current root |
 | `p` | Change root path |
@@ -230,6 +233,35 @@ the default branch; pushing the tag just marks the release).
 | `E` | Show scan errors (when any) |
 | `q` | Quit |
 | `?` | Help overlay |
+
+The legacy curses interface is still available with `storagemark --classic`.
+
+---
+
+## Removing files (`D`)
+
+Mark anything with `Space` (single items, whole directory subtrees, every
+file of an extension from the Types view, a whole age bucket from the Time
+view, or `A` for all filtered rows). The header keeps a running tally:
+`Marked: N items, X GB`.
+
+Press `D` to open the removal dialog. It shows every top-level item (nested
+marks are de-duplicated automatically), the total size, and warnings for
+recently-modified items or protected folders (`~/Documents`, `~/Library`, …).
+
+Two ways out, deliberately asymmetric:
+
+- **Move to Trash** — press `t` or click the button. Recoverable: the Trash
+  *is* the undo (macOS `~/.Trash`, Linux XDG trash with restore metadata).
+- **Permanent delete** — type `yes` and press Enter. Not recoverable.
+
+A progress bar tracks large removals; failures (e.g. cross-volume Trash
+moves, permissions) are collected in the `E` errors viewer. Afterwards the
+in-memory tree is pruned in place — totals, charts, and views update
+instantly with no rescan.
+
+The What-If view still exports an auditable `storagemark_cleanup_*.sh`
+script as an alternative to in-app removal.
 
 ---
 

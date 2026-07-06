@@ -11,7 +11,9 @@ requires-python = ">=3.13"
 license = { text = "MIT" }
 authors = [{ name = "Markus Wolf" }]
 keywords = ["disk", "storage", "tui", "curses", "du", "cleanup"]
-dependencies = []
+dependencies = [
+    "textual>=8.2.8",
+]
 
 [tool.setuptools.dynamic]
 version = { attr = "storagemark.__version__" }
@@ -31,6 +33,9 @@ include = ["storagemark*"]
 # scanner.py can recompile if the prebuilt binary is missing).
 [tool.setuptools.package-data]
 storagemark = ["c/storagescanner", "c/*.c", "c/*.h", "c/Makefile"]
+
+[dependency-groups]
+dev = []
 
 # Runtime has zero dependencies. Add dev tools here if needed:
 # [dependency-groups]

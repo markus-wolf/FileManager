@@ -177,6 +177,60 @@ class DirTree:
 
         return DirTree(root_node, flat, ext_map, errors, file_count, dir_count)
 
+    def prune(self, paths: list[str], node_map: dict[str, FileNode]) -> int:
+        """Remove subtrees rooted at `paths` from the in-memory tree.
+
+        Called after files are deleted/trashed on disk so the UI updates
+        instantly instead of rescanning. Subtree aggregates of every
+        ancestor are decremented; flat/ext_map/errors/counts are rebuilt
+        by filtering (O(N), ~0.3s at 1M nodes). Returns nodes removed.
+        """
+        roots = [node_map[p] for p in paths if p in node_map]
+        if not roots:
+            return 0
+
+        # Collect every node in the removed subtrees (iterative DFS).
+        removed: set[int] = set()
+        for r in roots:
+            if id(r) in removed:
+                continue
+            stack: list[FileNode] = [r]
+            while stack:
+                n = stack.pop()
+                if id(n) in removed:
+                    continue
+                removed.add(id(n))
+                stack.extend(n.children)
+
+        # Detach top-level roots (parent not itself removed) and subtract
+        # their subtree totals from every ancestor.
+        for r in roots:
+            p = r.parent
+            if p is None or id(p) in removed:
+                continue
+            try:
+                p.children.remove(r)
+            except ValueError:
+                continue   # already detached (duplicate path in input)
+            sb, sd, sc = r.subtree_bytes, r.subtree_disk, r.subtree_count
+            while p is not None:
+                p.subtree_bytes -= sb
+                p.subtree_disk -= sd
+                p.subtree_count -= sc
+                p = p.parent
+
+        self.flat = [n for n in self.flat if id(n) not in removed]
+        self.errors = [n for n in self.errors if id(n) not in removed]
+        for ext in list(self.ext_map):
+            kept = [n for n in self.ext_map[ext] if id(n) not in removed]
+            if kept:
+                self.ext_map[ext] = kept
+            else:
+                del self.ext_map[ext]
+        self._file_count = sum(1 for n in self.flat if n.type == "f")
+        self._dir_count = sum(1 for n in self.flat if n.type == "d")
+        return len(removed)
+
     @property
     def total_disk(self) -> int:
         return self.root.subtree_disk

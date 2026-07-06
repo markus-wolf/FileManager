@@ -458,3 +458,47 @@ Sorting and filtering operate on the in-memory tree (no re-scan). Re-scan is tri
 | Filesystem boundary | `-x` uses `st_dev` comparison | same |
 | Disk usage | `st_blocks * 512` | same |
 | Binary output | `write(STDOUT_FILENO, ...)` | same |
+
+---
+
+## 14. Milestone: File Identification & Removal UX (Textual)
+
+Decided 2026-07-06. The TUI moves from curses to **Textual** (spike passed at
+988k files: Line-API widget adds ~20 MB over the model, scroll frame time
+size-independent, sort 0.15–0.33 s, filter 0.19 s — see
+`spike/textual_files_spike.py`). The new UX is built natively on Textual;
+curses code is kept during the port behind a `--classic` flag, then removed.
+This adds Textual (+Rich) as the first runtime dependencies — accepted;
+`uv tool install` resolves them without a compiler.
+
+### Phases
+
+**Phase 0 — Textual port (feature parity).** App shell, header/footer, the
+five views, errors overlay, filter bar, marking, script export. Files view
+uses the Line API over `DirTree.flat` (never row-per-widget). SubDirs uses a
+lazy `Tree`. Scan runs as `@work(thread=True)` posting progress messages.
+
+**Phase 1 — Bulk marking.** `Space` on a Types row marks the whole
+extension; on a Time bucket marks the bucket; `A` in Files marks all
+currently filtered rows. Header shows a persistent tally:
+`Marked: N items, X GB`.
+
+**Phase 2 — In-app removal, Trash-first.** `D` opens a confirmation modal:
+itemized list, total size, existing warnings (young files, nested marks).
+Default action moves items to the system Trash (macOS `~/.Trash`, Linux XDG
+trash) — Trash is the undo. Permanent delete requires typing `yes`.
+Progress bar for large sets; per-item failures feed the errors viewer.
+Afterwards the in-memory tree is pruned and totals update instantly (no
+rescan). Script export remains as the audit path. Warn-don't-block on
+protected roots (`~/Library`, `~/Documents`, `~/Desktop` themselves, …).
+
+**Phase 3 — Finders.** One-keystroke presets that pre-filter the Files view:
+large-and-old (>100 MB, untouched >1 yr, tunable), junk (caches, build
+artifacts: `node_modules`, `__pycache__`, `.venv`, `build/`, `dist/`, logs),
+installers/archives in Downloads (`.dmg`, `.pkg`, `.zip`), big media.
+Same marking/removal flow applies — no new mental model.
+
+**Phase 4 — Duplicates.** Same-size candidates → 64 KB partial hash → full
+hash confirm. Grouped view with keep-newest / keep-first strategies; marks
+feed the normal removal flow. Phased last (only piece with real algorithmic
+cost).

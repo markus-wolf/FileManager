@@ -36,6 +36,8 @@ def parse_args():
                    help="Hide entries smaller than size (e.g. 10MB)")
     p.add_argument("--scanner", default=None,
                    help="Override path to storagescanner binary")
+    p.add_argument("--classic", action="store_true",
+                   help="Use the legacy curses UI instead of Textual")
     return p.parse_args()
 
 
@@ -111,9 +113,12 @@ def main():
         else:
             once_text(tree, root)
             print(f"  Scanned in {elapsed:.2f}s")
-    else:
+    elif args.classic:
         from .tui.app import run_tui
         run_tui(root, start_view=args.view, scanner_kwargs=scanner_kwargs)
+    else:
+        from .ui.app import run_ui
+        run_ui(root, scanner_kwargs=scanner_kwargs)
 
 
 if __name__ == "__main__":
