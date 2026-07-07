@@ -231,10 +231,44 @@ the default branch; pushing the tag just marks the release).
 | `p` | Change root path |
 | `e` | Export current view to CSV |
 | `E` | Show scan errors (when any) |
-| `q` | Quit |
+| `Ctrl-C` | During a scan: interrupt dialog (see below); when idle: quit |
+| `q` / `Ctrl-Q` | Quit |
 | `?` | Help overlay |
 
 The legacy curses interface is still available with `storagemark --classic`.
+
+---
+
+## Interrupting a scan (`Ctrl-C`)
+
+Large scans (a full home directory can be 1M+ objects) run in the
+background — the header shows a live counter and the path currently being
+walked. Press `Ctrl-C` while scanning to get:
+
+```
+Scan running — 412,388 objects so far
+
+  Ctrl-Q    quit StorageMark
+  Ctrl-C    stop scanning, show PARTIAL results
+  any key   keep scanning
+```
+
+- **Ctrl-Q** quits cleanly — the scanner subprocess is terminated, nothing
+  keeps running in the background.
+- **Ctrl-C** (again) stops the scan and shows everything collected so far,
+  flagged `⚠PARTIAL` in the header. Press `r` to re-scan later.
+- **Any other key** dismisses the dialog; the scan was never paused. If the
+  scan finishes while the dialog is open, it closes itself.
+
+---
+
+## Appearance
+
+The UI ships with a custom **Norton Commander** theme built from the CGA
+palette — blue panels, cyan chrome, yellow marks — applied by default.
+Warnings use bright orange rather than the historical red for readability
+on blue. Press `Ctrl-P` and type "theme" to switch to any of Textual's
+built-in themes at runtime.
 
 ---
 
