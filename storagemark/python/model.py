@@ -39,6 +39,13 @@ class FileNode:
     subtree_disk: int = 0
     subtree_count: int = 0
 
+    @property
+    def display_size(self) -> int:
+        """Disk space this node represents: subtree total for a directory,
+        own allocation otherwise. The number shown everywhere in the UI
+        and the amount freed by removing the node."""
+        return self.subtree_disk if self.type == "d" else self.size_disk
+
     @staticmethod
     def from_record(rec: dict) -> FileNode:
         path = rec.get("path", "")
@@ -255,13 +262,23 @@ class DirTree:
         return self._dir_count
 
 
+def short_hostname() -> str:
+    """Short host name for display (no .local / domain suffix)."""
+    import socket
+    try:
+        return socket.gethostname().split(".")[0]
+    except Exception:
+        return ""
+
+
 def fmt_size(b: int, unit: str = "auto") -> str:
-    units = [("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10), ("B", 1)]
+    """Human size, clean text (no padding — align with format specs)."""
+    units = [("GB", 1 << 30), ("MB", 1 << 20), ("KB", 1 << 10)]
     if unit == "auto":
         for suffix, div in units:
             if b >= div:
-                return f"{b / div:7.1f} {suffix}"
-        return f"{b:7d} B  "
+                return f"{b / div:.1f} {suffix}"
+        return f"{b} B"
     mapping = {"GB": 1 << 30, "MB": 1 << 20, "KB": 1 << 10, "B": 1}
     div = mapping.get(unit, 1)
-    return f"{b / div:7.1f} {unit}"
+    return f"{b / div:.1f} {unit}"

@@ -297,12 +297,11 @@ storagemark [OPTIONS] [path]
   path                   Root to scan (default: current directory)
   -o, --once             Non-interactive: print summary and exit
   -f, --format <fmt>     Output format for --once: text|json|csv
-  -v, --view <n>         Start in view N (1–5)
   -d, --depth <n>        Max scan depth
   -x, --one-filesystem   Do not cross mount points
   --skip <glob>          Skip matching paths (repeatable)
-  --threshold <size>     Hide entries smaller than size (e.g. 10MB)
   --scanner <path>       Override path to storagescanner binary
+  --version              Print version
 ```
 
 ---
@@ -361,24 +360,22 @@ Any answer other than `y` / `yes` aborts with no changes. Pass `-y` or `--yes` t
 storagemark/
 ├── c/
 │   ├── storagescanner.c   # main scanner; binary + JSON output
-│   ├── scanner.h
 │   ├── hashset.c/.h       # open-addressing inode dedup
 │   └── Makefile
 ├── python/
 │   ├── __main__.py        # entry point, arg parsing
 │   ├── scanner.py         # subprocess wrapper; binary struct parser
-│   ├── model.py           # FileNode (slots), DirTree (iterative build)
-│   ├── tui/
-│   │   ├── app.py         # curses main loop, background scan thread
-│   │   ├── header.py      # header / footer rendering
-│   │   ├── views/
-│   │   │   ├── subdirs.py
-│   │   │   ├── files.py
-│   │   │   ├── types.py
-│   │   │   ├── time_view.py
-│   │   │   └── whatif.py
-│   │   └── widgets.py     # ScrollList, FilterBar, bar chart
-│   └── export.py
+│   ├── model.py           # FileNode (slots), DirTree (iterative build, prune)
+│   ├── trash.py           # platform trash (macOS ~/.Trash, Linux XDG)
+│   ├── export.py          # CSV / JSON / cleanup-script export
+│   └── ui/
+│       ├── app.py         # Textual app: tabs, scan worker, modals, removal
+│       ├── filelist.py    # virtualized Files view (Line API)
+│       ├── views.py       # SubDirs lazy tree, Types, Time, What-If
+│       ├── remove.py      # removal confirm modal + progress screen
+│       ├── marks.py       # version-counted MarkSet
+│       └── theme.py       # Norton Commander theme (CGA palette)
+├── tests/                   # pytest; fast default, -m slow = 1M-scale suites
 ├── storagemark/__init__.py  # package marker + __version__ (single version source)
 ├── setup.py                 # build hook: compiles C scanner at build time
 ├── pyproject.toml           # uv / setuptools metadata; version read dynamically
@@ -387,6 +384,9 @@ storagemark/
 ├── run.sh                   # dev launcher (uv run)
 └── README.md
 ```
+
+The legacy curses UI (`python/tui/`) and the Textual feasibility spike
+(`spike/`) were removed after v1.0.1 — both remain available at that tag.
 
 ### Versioning & releases
 

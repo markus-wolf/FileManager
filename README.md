@@ -236,7 +236,8 @@ the default branch; pushing the tag just marks the release).
 | `q` / `Ctrl-Q` | Quit |
 | `?` | Help overlay |
 
-The legacy curses interface is still available with `storagemark --classic`.
+(The legacy curses interface was removed in v1.1 — the last version carrying
+it is tag `v1.0.1`.)
 
 ---
 
@@ -362,23 +363,21 @@ storagemark/
 ├── c/
 │   ├── storagescanner.c   # recursive walker using lstat; binary + JSON output
 │   ├── hashset.c/.h       # inode dedup for hard links
-│   ├── scanner.h
 │   └── Makefile
 └── python/
     ├── __main__.py        # CLI entry point
-    ├── model.py           # FileNode (slotted), DirTree, iterative build
+    ├── model.py           # FileNode (slotted), DirTree, prune, iterative build
     ├── scanner.py         # subprocess wrapper; binary struct parser
+    ├── trash.py           # platform trash (macOS ~/.Trash, Linux XDG)
     ├── export.py          # CSV, JSON, shell script export
-    └── tui/
-        ├── app.py         # curses main loop, background scan thread
-        ├── header.py      # header / footer rendering
-        ├── widgets.py     # ScrollList, FilterBar, bar chart
-        └── views/
-            ├── subdirs.py
-            ├── files.py
-            ├── types.py
-            ├── time_view.py
-            └── whatif.py
+    └── ui/
+        ├── app.py         # Textual app: tabs, scan worker, modals, removal
+        ├── filelist.py    # virtualized Files view (Line API, ~1M rows)
+        ├── views.py       # SubDirs lazy tree, Types, Time, What-If
+        ├── remove.py      # removal confirm modal + progress
+        ├── marks.py       # version-counted mark set
+        └── theme.py       # Norton Commander theme (CGA palette)
+tests/                     # pytest: fast suites default, -m slow for 1M-scale
 ```
 
 ---

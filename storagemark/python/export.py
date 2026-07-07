@@ -49,14 +49,14 @@ def export_cleanup_script(marked: list[FileNode], timestamp: str | None = None) 
     ts = timestamp or datetime.now().strftime("%Y%m%d_%H%M%S")
 
     total_disk = sum(
-        n.subtree_disk if n.type == 'd' else n.size_disk for n in marked
+        n.display_size for n in marked
     )
     total_gb = total_disk / (1 << 30)
 
     # Build the item list used both in the preview and the rm commands
     items = []
     for n in marked:
-        size = n.subtree_disk if n.type == 'd' else n.size_disk
+        size = n.display_size
         label = f"{size / (1 << 20):8.1f} MB  {n.path}"
         items.append((n.path, label))
 

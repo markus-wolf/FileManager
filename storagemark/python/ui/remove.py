@@ -75,12 +75,12 @@ class RemoveScreen(ModalScreen[str | None]):
         self.total_marked = total_marked
 
     def compose(self) -> ComposeResult:
-        total = sum(n.subtree_disk if n.type == "d" else n.size_disk
+        total = sum(n.display_size
                     for n in self.roots)
         warns = build_warnings(self.roots)
         head = (f"[b]Remove {len(self.roots):,} item(s)[/b] "
                 f"({self.total_marked:,} marked)  —  "
-                f"[b]{fmt_size(total).strip()}[/b]\n")
+                f"[b]{fmt_size(total)}[/b]\n")
         if warns:
             head += "\n".join(f"[bold {ALERT_ORANGE}]{w}[/]" for w in warns) + "\n"
         head += ("\n[b]t[/b] / button = move to [b]Trash[/b] (recoverable)"
@@ -102,11 +102,11 @@ class RemoveScreen(ModalScreen[str | None]):
         t = self.query_one("#remove-table", DataTable)
         t.cursor_type = "row"
         t.add_columns("SIZE", "TYPE", "PATH")
-        by_size = sorted(self.roots, key=lambda n: n.subtree_disk
-                         if n.type == "d" else n.size_disk, reverse=True)
+        by_size = sorted(self.roots, key=lambda n: n.display_size,
+                         reverse=True)
         for n in by_size[:MAX_LISTED]:
-            size = n.subtree_disk if n.type == "d" else n.size_disk
-            t.add_row(fmt_size(size).strip(),
+            size = n.display_size
+            t.add_row(fmt_size(size),
                       "dir" if n.type == "d" else "file", n.path)
         if len(by_size) > MAX_LISTED:
             t.add_row("…", "", f"and {len(by_size) - MAX_LISTED:,} more")

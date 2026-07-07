@@ -1,6 +1,4 @@
 from __future__ import annotations
-import io
-import json
 import os
 import struct
 import subprocess
@@ -98,28 +96,11 @@ def _stream_binary(
             progress_cb(count)
 
 
-def _stream_json(
-    stream,
-    progress_cb: Callable[[int], None] | None,
-) -> Iterator[dict]:
-    """Parse NDJSON records (fallback / debug mode)."""
-    count = 0
-    for line in stream:
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            rec = json.loads(line)
-            count += 1
-            if progress_cb and count % 1000 == 0:
-                progress_cb(count)
-            yield rec
-        except json.JSONDecodeError:
-            continue
-
-
 # ------------------------------------------------------------------ #
 # Public API                                                           #
+#                                                                      #
+# NB: the C scanner can also emit NDJSON (run it without -b) for       #
+# manual debugging; Python always consumes the binary protocol.        #
 # ------------------------------------------------------------------ #
 
 _C_DIR = Path(__file__).parent.parent / "c"
@@ -195,23 +176,19 @@ def stream_records(
     max_depth: int = 0,
     skip: list[str] | None = None,
     scanner_path: str | None = None,
-    binary: bool = True,
     progress_cb: Callable[[int], None] | None = None,
     should_stop: Callable[[], bool] | None = None,
 ) -> Iterator[dict]:
-    """Yield parsed records from the C scanner.
+    """Yield parsed records from the C scanner (binary protocol).
 
-    binary=True (default): uses fast struct-based binary protocol.
-    binary=False: falls back to NDJSON (slower, useful for debugging).
     should_stop: polled once per record; when it returns True the stream
     ends early and the scanner subprocess is terminated immediately
     (rather than waiting for it to die on SIGPIPE).
     """
     binary_exe = scanner_path or _find_scanner()
-    cmd = [binary_exe]
+    cmd = [binary_exe, "-b"]
     if one_fs:       cmd.append("-x")
     if follow_links: cmd.append("-L")
-    if binary:       cmd.append("-b")
     if max_depth:    cmd += ["-d", str(max_depth)]
     if skip:         cmd += ["--skip", ":".join(skip)]
     cmd.append(os.path.abspath(root))
@@ -225,14 +202,7 @@ def stream_records(
 
     stopped = False
     try:
-        raw = proc.stdout
-        if binary:
-            source = _stream_binary(raw, progress_cb)
-        else:
-            source = _stream_json(
-                io.TextIOWrapper(raw, encoding="utf-8", errors="replace"),
-                progress_cb,
-            )
+        source = _stream_binary(proc.stdout, progress_cb)
         for rec in source:
             if should_stop is not None and should_stop():
                 stopped = True

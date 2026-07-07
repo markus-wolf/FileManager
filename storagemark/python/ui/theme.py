@@ -18,8 +18,6 @@ CGA_CYAN        = "#00AAAA"
 CGA_CYAN_BRIGHT = "#55FFFF"
 CGA_WHITE       = "#FFFFFF"
 CGA_YELLOW      = "#FFFF55"
-CGA_RED         = "#AA0000"
-CGA_RED_BRIGHT  = "#FF5555"
 CGA_GREEN       = "#55FF55"
 CGA_BLACK       = "#000000"
 

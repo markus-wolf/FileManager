@@ -7,7 +7,6 @@ Scan runs in a thread worker; the ~1M-row Files view is virtualized
 from __future__ import annotations
 
 import os
-import socket
 import threading
 import time
 from datetime import datetime
@@ -23,7 +22,7 @@ from textual.widgets import (DataTable, Footer, Input, Static, TabbedContent,
 
 from ... import __version__
 from ..export import export_csv, export_cleanup_script
-from ..model import DirTree, fmt_size
+from ..model import DirTree, fmt_size, short_hostname
 from ..scanner import stream_records
 from ..trash import TrashError, delete_permanently, send_to_trash
 from .filelist import FileList
@@ -32,10 +31,7 @@ from .remove import ProgressScreen, RemoveScreen, top_level_roots
 from .theme import NORTON_THEME
 from .views import SubdirsTree, TimeTable, TypesTable, WhatIfPanel, TIME_FIELDS
 
-try:
-    HOSTNAME = socket.gethostname().split(".")[0]
-except Exception:
-    HOSTNAME = ""
+HOSTNAME = short_hostname()
 
 
 # ------------------------------------------------------------------ #
@@ -257,12 +253,15 @@ class StorageMarkApp(App):
         # plain text (len == display width); if the terminal is narrower
         # than the content, truncate the left side — never wrap the version.
         # NB: no '[' in line 1 — Static parses Rich markup.
+        try:
+            hdr = self.query_one("#hdr", Static)
+        except Exception:
+            return   # interval timer can fire once more during app teardown
         status = (f"Scanned: {self.scan_time:.1f}s" if self.dir_tree
                   else f"SCANNING…  {self.scan_count:,} objects")
         left = (f" StorageMark  {'⚠PARTIAL ' if self.partial else ''}"
                 f"{HOSTNAME}:{self.root_path}    {status}")
         ver = f"v{__version__}"
-        hdr = self.query_one("#hdr", Static)
         width = hdr.size.width or self.size.width or 80
         avail = max(10, width - len(ver) - 1)      # room reserved for version
         if len(left) > avail:
@@ -271,17 +270,17 @@ class StorageMarkApp(App):
 
         if self.dir_tree:
             t = self.dir_tree
-            line2 = (f" Total: {fmt_size(t.total_disk).strip()}  "
+            line2 = (f" Total: {fmt_size(t.total_disk)}  "
                      f"Files: {t.file_count:,}  Dirs: {t.dir_count:,}  "
                      f"Errors: {len(t.errors)}")
             if self.marked:
                 line2 += (f"  [b]Marked: {len(self.marked):,} items, "
-                          f"{fmt_size(self.marked_size()).strip()}[/b]")
+                          f"{fmt_size(self.marked_size())}[/b]")
         else:
             at = self.scan_last_path[-90:] if self.scan_last_path else "…"
             line2 = f" [b]{self.scan_count:,}[/b] objects   [dim]at: {at}[/dim]"
 
-        self.query_one("#hdr", Static).update(line1 + "\n" + line2)
+        hdr.update(line1 + "\n" + line2)
 
     def marked_size(self) -> int:
         """Total disk of marked items; recomputed only when marks change."""
@@ -292,7 +291,7 @@ class StorageMarkApp(App):
             for p in self.marked:
                 n = nm.get(p)
                 if n is not None:
-                    total += n.subtree_disk if n.type == "d" else n.size_disk
+                    total += n.display_size
             self._marked_size = total
         return self._marked_size
 
@@ -511,7 +510,7 @@ class StorageMarkApp(App):
             self.push_screen(ConfirmScreen(
                 f"[b]No filter is active.[/b]\n"
                 f"Mark ALL {len(fl.rows):,} files "
-                f"({fmt_size(total).strip()})?"), on_confirm)
+                f"({fmt_size(total)})?"), on_confirm)
             return
         n = fl.mark_all_visible()
         self.notify(f"Marked {n:,} items")
@@ -564,7 +563,7 @@ class StorageMarkApp(App):
 
         tt = self.query_one("#time-table", TimeTable)
         by_bucket: dict[str, int] = {}
-        for label, (field, lo, hi) in tt._ranges.items():
+        for label, (field, lo, hi) in tt.bucket_ranges().items():
             by_bucket[label] = sum(
                 1 for n in marked_files
                 if (lo is None or getattr(n, field) >= lo)
@@ -622,9 +621,7 @@ class StorageMarkApp(App):
                        failures: list[tuple]) -> None:
         self.pop_screen()                    # progress screen
         tree = self.dir_tree
-        freed = sum((self.node_map[p].subtree_disk
-                     if self.node_map[p].type == "d"
-                     else self.node_map[p].size_disk)
+        freed = sum(self.node_map[p].display_size
                     for p in ok if p in self.node_map)
 
         if ok and tree:
@@ -657,7 +654,7 @@ class StorageMarkApp(App):
         self.update_header()
 
         verb = "Trashed" if mode == "trash" else "Deleted"
-        msg = f"{verb} {len(ok):,} item(s), freed {fmt_size(freed).strip()}"
+        msg = f"{verb} {len(ok):,} item(s), freed {fmt_size(freed)}"
         if failures:
             msg += f" — {len(failures)} failed (see [E]rrors)"
             self.notify(msg, severity="warning", timeout=15)

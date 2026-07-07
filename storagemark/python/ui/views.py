@@ -13,6 +13,7 @@ from textual.widgets import DataTable, Static, Tree
 from textual.widgets.tree import TreeNode
 
 from ..model import DirTree, FileNode, fmt_size
+from .remove import YOUNG_DAYS
 from .theme import ALERT_ORANGE
 
 BAR_FULL, BAR_EMPTY, BAR_W = "█", "░", 20
@@ -45,7 +46,7 @@ class SubdirsTree(Tree[FileNode]):
         self.root.expand()      # NodeExpanded handler materializes children
 
     def _label(self, n: FileNode) -> str:
-        size = n.subtree_disk if n.type == "d" else n.size_disk
+        size = n.display_size
         frac = size / self.total
         mark = "●" if n.path in self.marked else " "
         return (f"{mark} {n.name:<32.32} {fmt_size(size):>10}  "
@@ -62,7 +63,7 @@ class SubdirsTree(Tree[FileNode]):
         if node.children or node.data is None:
             return
         kids = sorted(node.data.children,
-                      key=lambda c: c.subtree_disk if c.type == "d" else c.size_disk,
+                      key=lambda c: c.display_size,
                       reverse=True)
         for child in kids:
             if child.type == "d":
@@ -155,8 +156,8 @@ class TypesTable(DataTable):
         rows.sort(key=lambda r: r[2], reverse=True)
         for ext, count, disk, avg in rows:
             frac = disk / total
-            self.add_row(ext, f"{count:,}", "", fmt_size(disk).strip(),
-                         fmt_size(avg).strip(), f"{frac * 100:5.1f}%",
+            self.add_row(ext, f"{count:,}", "", fmt_size(disk),
+                         fmt_size(avg), f"{frac * 100:5.1f}%",
                          bar(frac), key=ext)
 
     def refresh_marks(self, marked_by_ext: dict[str, int]) -> None:
@@ -246,7 +247,7 @@ class TimeTable(DataTable):
             self._ranges[label] = (field, lo, hi)
             self._counts[label] = counts[i]
             self.add_row(label, f"{counts[i]:,}", "",
-                         fmt_size(disks[i]).strip(),
+                         fmt_size(disks[i]),
                          f"{frac * 100:5.1f}%", bar(frac), key=label)
 
     def refresh_marks(self, marked_by_bucket: dict[str, int]) -> None:
@@ -257,6 +258,10 @@ class TimeTable(DataTable):
                 self.update_cell(label, self._marked_col, text)
             except Exception:
                 pass
+
+    def bucket_ranges(self) -> dict[str, tuple]:
+        """label -> (field, lo, hi) for the current time field."""
+        return dict(self._ranges)
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         label = str(event.row_key.value)
@@ -301,15 +306,15 @@ class WhatIfPanel(Vertical):
         node_map = self.node_map
         nodes = [node_map[p] for p in sorted(self.marked) if p in node_map]
         total = self.dir_tree.total_disk or 1
-        would_free = sum(n.subtree_disk if n.type == "d" else n.size_disk
+        would_free = sum(n.display_size
                          for n in nodes)
 
         warn = []
         now = datetime.now()
         marked = set(self.marked)
         for n in nodes:
-            if (now - n.mtime).days < 30:
-                warn.append(f"! {n.name} is < 30 days old")
+            if (now - n.mtime).days < YOUNG_DAYS:
+                warn.append(f"! {n.name} is < {YOUNG_DAYS} days old")
             parent = n.parent
             while parent is not None:
                 if parent.path in marked:
@@ -320,9 +325,9 @@ class WhatIfPanel(Vertical):
 
         summary = (
             f"[b]WHAT-IF[/b]  marked: {len(nodes):,} items   "
-            f"would free: [b]{fmt_size(would_free).strip()}[/b] "
+            f"would free: [b]{fmt_size(would_free)}[/b] "
             f"({would_free / total * 100:.1f}% of total)   "
-            f"after: {fmt_size(max(0, total - would_free)).strip()}\n"
+            f"after: {fmt_size(max(0, total - would_free))}\n"
             + ("\n".join(f"[bold {ALERT_ORANGE}]{w}[/]" for w in warn) if warn else
                "[dim]Space=unmark  x=clear all  D=remove (Trash/permanent)  "
                "Enter=export script[/dim]")
@@ -332,8 +337,8 @@ class WhatIfPanel(Vertical):
         t = self.query_one("#whatif-table", DataTable)
         t.clear()
         for n in nodes:
-            size = n.subtree_disk if n.type == "d" else n.size_disk
-            t.add_row("✓", fmt_size(size).strip(), n.path, key=n.path)
+            size = n.display_size
+            t.add_row("✓", fmt_size(size), n.path, key=n.path)
 
     def on_key(self, event) -> None:
         # Space on a marked row unmarks it (bubbles up from the DataTable)

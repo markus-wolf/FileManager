@@ -13,7 +13,6 @@ from typing import Callable
 from rich.segment import Segment
 from rich.style import Style
 from textual.geometry import Size
-from textual.message import Message
 from textual.scroll_view import ScrollView
 from textual.strip import Strip
 
@@ -44,11 +43,6 @@ def make_filter(query: str) -> Callable[[FileNode], bool]:
 
 class FileList(ScrollView, can_focus=True):
     """Sortable, filterable, markable list over a flat list of FileNodes."""
-
-    class CursorMoved(Message):
-        def __init__(self, node: FileNode | None) -> None:
-            super().__init__()
-            self.node = node
 
     def __init__(self, marked: set[str], unit_ref: list[str], **kwargs) -> None:
         super().__init__(**kwargs)
@@ -119,8 +113,8 @@ class FileList(ScrollView, can_focus=True):
         is_marked = n.path in self.marked
         is_cursor = idx == self.cursor and self.has_focus
         mark = "●" if is_marked else " "
-        text = (f"{mark} {fmt_size(n.size_disk, unit)}  "
-                f"{fmt_size(n.size_bytes, unit)}  "
+        text = (f"{mark} {fmt_size(n.size_disk, unit):>10}  "
+                f"{fmt_size(n.size_bytes, unit):>10}  "
                 f"{n.mtime:%Y-%m-%d %H:%M}  {n.name}")
         if is_cursor:                   # NC cursor bar: black on cyan
             style = Style(color=CGA_YELLOW if is_marked else CGA_BLACK,
@@ -144,7 +138,6 @@ class FileList(ScrollView, can_focus=True):
         elif self.cursor >= top + height:
             self.scroll_to(y=self.cursor - height + 1, animate=False)
         self.refresh()
-        self.post_message(self.CursorMoved(self.selected()))
 
     def jump(self, where: str) -> None:
         if not self.rows:

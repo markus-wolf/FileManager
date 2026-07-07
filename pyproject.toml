@@ -35,8 +35,15 @@ include = ["storagemark*"]
 storagemark = ["c/storagescanner", "c/*.c", "c/*.h", "c/Makefile"]
 
 [dependency-groups]
-dev = []
+dev = [
+    "pytest>=9.1.1",
+]
 
-# Runtime has zero dependencies. Add dev tools here if needed:
-# [dependency-groups]
-# dev = []
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# Fast suites by default. Run everything with: uv run pytest -m ""
+# 'slow' tests scan the real home directory (~1M files, minutes).
+addopts = "-m 'not slow' -q"
+markers = [
+    "slow: scans the full home directory; run explicitly with -m slow",
+]
