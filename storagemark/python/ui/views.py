@@ -13,6 +13,7 @@ from textual.widgets import DataTable, Static, Tree
 from textual.widgets.tree import TreeNode
 
 from ..model import DirTree, FileNode, fmt_size
+from .theme import ALERT_ORANGE
 
 BAR_FULL, BAR_EMPTY, BAR_W = "█", "░", 20
 
@@ -256,7 +257,7 @@ class WhatIfPanel(Vertical):
             f"would free: [b]{fmt_size(would_free).strip()}[/b] "
             f"({would_free / total * 100:.1f}% of total)   "
             f"after: {fmt_size(max(0, total - would_free)).strip()}\n"
-            + ("\n".join(f"[red]{w}[/red]" for w in warn) if warn else
+            + ("\n".join(f"[bold {ALERT_ORANGE}]{w}[/]" for w in warn) if warn else
                "[dim]Space=unmark  x=clear all  D=remove (Trash/permanent)  "
                "Enter=export script[/dim]")
         )

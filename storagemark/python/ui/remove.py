@@ -17,6 +17,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Input, ProgressBar, Static
 
 from ..model import FileNode, fmt_size
+from .theme import ALERT_ORANGE
 
 MAX_LISTED = 200
 YOUNG_DAYS = 30
@@ -81,7 +82,7 @@ class RemoveScreen(ModalScreen[str | None]):
                 f"({self.total_marked:,} marked)  —  "
                 f"[b]{fmt_size(total).strip()}[/b]\n")
         if warns:
-            head += "\n".join(f"[red]{w}[/red]" for w in warns) + "\n"
+            head += "\n".join(f"[bold {ALERT_ORANGE}]{w}[/]" for w in warns) + "\n"
         head += ("\n[b]t[/b] / button = move to [b]Trash[/b] (recoverable)"
                  "\ntype [b]yes[/b] + Enter = delete permanently  —  "
                  "[b]Esc[/b] = cancel")

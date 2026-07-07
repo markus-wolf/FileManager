@@ -18,6 +18,7 @@ from textual.scroll_view import ScrollView
 from textual.strip import Strip
 
 from ..model import FileNode, fmt_size
+from .theme import CGA_BLACK, CGA_CYAN, CGA_YELLOW
 
 SORT_KEYS = ["size_disk", "size_bytes", "mtime", "atime", "name", "ext"]
 SORT_LABELS = {"size_disk": "DISK", "size_bytes": "LOGICAL", "mtime": "MODIFIED",
@@ -107,17 +108,24 @@ class FileList(ScrollView, can_focus=True):
         scroll_x, scroll_y = self.scroll_offset
         idx = y + scroll_y
         width = self.size.width
-        if idx >= len(self.rows):
-            return Strip.blank(width)
+        base = self.rich_style          # widget CSS style (theme bg/fg) —
+        if idx >= len(self.rows):       # Line API does NOT apply it for us
+            return Strip.blank(width, base)
         n = self.rows[idx]
         unit = self.unit_ref[0]
-        mark = "●" if n.path in self.marked else " "
+        is_marked = n.path in self.marked
+        is_cursor = idx == self.cursor and self.has_focus
+        mark = "●" if is_marked else " "
         text = (f"{mark} {fmt_size(n.size_disk, unit)}  "
                 f"{fmt_size(n.size_bytes, unit)}  "
                 f"{n.mtime:%Y-%m-%d %H:%M}  {n.name}")
-        style = Style(reverse=(idx == self.cursor and self.has_focus))
-        if n.path in self.marked:
-            style += Style(color="yellow")
+        if is_cursor:                   # NC cursor bar: black on cyan
+            style = Style(color=CGA_YELLOW if is_marked else CGA_BLACK,
+                          bgcolor=CGA_CYAN, bold=is_marked)
+        elif is_marked:                 # NC marked file: bold yellow
+            style = base + Style(color=CGA_YELLOW, bold=True)
+        else:
+            style = base
         return Strip([Segment(text[:width].ljust(width), style)], width)
 
     # ----------------------------------------------------------- cursor --

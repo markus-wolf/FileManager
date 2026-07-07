@@ -27,6 +27,7 @@ from ..trash import TrashError, delete_permanently, send_to_trash
 from .filelist import FileList
 from .marks import MarkSet
 from .remove import ProgressScreen, RemoveScreen, top_level_roots
+from .theme import NORTON_THEME
 from .views import SubdirsTree, TimeTable, TypesTable, WhatIfPanel, TIME_FIELDS
 
 try:
@@ -100,7 +101,7 @@ class StorageMarkApp(App):
     TITLE = "StorageMark"
     AUTO_FOCUS = "#file-list"
     CSS = """
-    #hdr { height: 2; background: $panel; color: $accent; }
+    #hdr { height: 2; background: $panel; color: auto 100%; }
     #filter-input { display: none; dock: bottom; height: 1; }
     #filter-input.visible { display: block; }
     #errors-box, #path-box { width: 90%; height: 80%; margin: 2 4;
@@ -174,6 +175,8 @@ class StorageMarkApp(App):
         yield Footer()
 
     def on_mount(self) -> None:
+        self.register_theme(NORTON_THEME)
+        self.theme = "norton-commander"
         self.update_header()
         self.set_interval(0.25, self.update_header)
         self.query_one(TabbedContent).loading = True
@@ -202,8 +205,8 @@ class StorageMarkApp(App):
                      f"Files: {t.file_count:,}  Dirs: {t.dir_count:,}  "
                      f"Errors: {len(t.errors)}")
             if self.marked:
-                line2 += (f"  [b yellow]Marked: {len(self.marked):,} items, "
-                          f"{fmt_size(self.marked_size()).strip()}[/]")
+                line2 += (f"  [b]Marked: {len(self.marked):,} items, "
+                          f"{fmt_size(self.marked_size()).strip()}[/b]")
         else:
             at = self.scan_last_path[-90:] if self.scan_last_path else "…"
             line2 = f" [b]{self.scan_count:,}[/b] objects   [dim]at: {at}[/dim]"
