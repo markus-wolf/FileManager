@@ -29,11 +29,15 @@ class FileNode:
     ext: str
     hardlink_of: str
     error: str
-    children: list              # list[FileNode]
-    parent: object              # FileNode | None  (weak ref semantics via slots)
-    subtree_bytes: int
-    subtree_disk: int
-    subtree_count: int
+    # repr=False is load-bearing: repr of any node would otherwise recurse
+    # through parent to the root and back down children — stringifying the
+    # entire tree (~14s at 1M nodes when anything reprs a FileNode, e.g.
+    # Textual's @work building a worker description from its arguments).
+    children: list = field(repr=False)      # list[FileNode]
+    parent: object = field(repr=False)      # FileNode | None
+    subtree_bytes: int = 0
+    subtree_disk: int = 0
+    subtree_count: int = 0
 
     @staticmethod
     def from_record(rec: dict) -> FileNode:
@@ -183,7 +187,9 @@ class DirTree:
         Called after files are deleted/trashed on disk so the UI updates
         instantly instead of rescanning. Subtree aggregates of every
         ancestor are decremented; flat/ext_map/errors/counts are rebuilt
-        by filtering (O(N), ~0.3s at 1M nodes). Returns nodes removed.
+        by filtering (O(N), ~0.3s at 1M nodes). Entries for removed nodes
+        are also deleted from node_map in place, so callers must NOT
+        rebuild it from scratch. Returns nodes removed.
         """
         roots = [node_map[p] for p in paths if p in node_map]
         if not roots:
@@ -200,6 +206,7 @@ class DirTree:
                 if id(n) in removed:
                     continue
                 removed.add(id(n))
+                node_map.pop(n.path, None)   # keep node_map current, O(removed)
                 stack.extend(n.children)
 
         # Detach top-level roots (parent not itself removed) and subtract

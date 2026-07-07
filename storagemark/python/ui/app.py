@@ -69,18 +69,35 @@ class HelpScreen(ModalScreen):
     HELP = """[b]StorageMark — keys[/b]
 
  1–5        switch view          Space   mark / unmark (row, ext, bucket)
- j/k ↑/↓    move cursor          A       mark all filtered (Files)
- PgUp/PgDn  page                 x       clear all marks
- g/G        top / bottom         D       remove marked (Trash / permanent)
- s / S      sort / reverse       Enter   expand / drill in
- /          filter (Esc clears)  e       export view to CSV
- u          size unit            E       scan errors
- t          time field (Time)    p       change root path
- r          re-scan              q       quit      ?  this help
+ j/k ↑/↓    move cursor          A / U   mark / unmark all filtered (Files)
+ PgUp/PgDn  page                 M       show marked only (toggle)
+ g/G        top / bottom         x       clear all marks
+ s / S      sort / reverse       D       remove marked (Trash / permanent)
+ /          filter (Esc clears)  Enter   expand / drill in
+ u          size unit            e       export view to CSV
+ t          time field (Time)    E       scan errors
+ r          re-scan              p       change root path
+ q          quit                 ?       this help
 """
 
     def compose(self) -> ComposeResult:
         yield Static(self.HELP, id="help-box")
+
+
+class ConfirmScreen(ModalScreen[bool]):
+    """Generic y/N confirmation. Returns True only on y/Y/Enter."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__()
+        self.message = message
+
+    def compose(self) -> ComposeResult:
+        yield Static(f"{self.message}\n\n[b]y[/b] confirm    "
+                     "[b]any other key[/b] cancel", id="confirm-box")
+
+    def on_key(self, event) -> None:
+        self.dismiss(event.key in ("y", "Y", "enter"))
+        event.stop()
 
 
 class ScanInterruptScreen(ModalScreen[str]):
@@ -162,6 +179,8 @@ class StorageMarkApp(App):
         background: $surface; border: solid $warning; padding: 1 2; }
     #interrupt-box { width: auto; height: auto; margin: 6 8;
         background: $surface; border: solid $accent; padding: 1 2; }
+    #confirm-box { width: auto; height: auto; margin: 6 8;
+        background: $surface; border: solid $warning; padding: 1 2; }
     """
 
     BINDINGS = [
@@ -179,6 +198,8 @@ class StorageMarkApp(App):
         Binding("p", "path", "Path"),
         Binding("u", "unit", "Unit"),
         Binding("A", "mark_all", "Mark filtered", show=False),
+        Binding("U", "unmark_all", "Unmark filtered", show=False),
+        Binding("M", "marked_only", "Marked only", show=False),
         Binding("x", "clear_marks", "Clear marks", show=False),
         Binding("t", "time_field", "Time field", show=False),
         Binding("D", "delete_marked", "Delete marked"),
@@ -202,6 +223,7 @@ class StorageMarkApp(App):
         self.partial = False
         self.scanning = False
         self._scan_abort = threading.Event()
+        self._dirty: set[str] = set()      # views needing reload on activation
 
     # ------------------------------------------------------------ UI --
 
@@ -324,13 +346,47 @@ class StorageMarkApp(App):
                 f"Scan interrupted — showing PARTIAL results "
                 f"({self.scan_count:,} objects). Press r to re-scan.",
                 severity="warning", timeout=12)
-        files = [n for n in tree.flat if n.type == "f"]
-        self.query_one("#file-list", FileList).set_files(files)
-        self.query_one("#subdirs-tree", SubdirsTree).load(tree)
-        self.query_one("#types-table", TypesTable).load(tree)
-        self.query_one("#time-table", TimeTable).load(tree)
-        self.query_one("#whatif-panel", WhatIfPanel).load(tree, self.node_map)
+        # Refresh only the visible view now; others reload lazily on
+        # activation. At ~1M nodes each view load costs real time — doing
+        # all five eagerly is what froze the UI.
+        self._dirty = {"subdirs", "files", "types", "time", "whatif"}
+        self._refresh_pane(self.query_one(TabbedContent).active)
         self.update_header()
+
+    # ------------------------------------------------- lazy view loads --
+
+    def _refresh_pane(self, pane: str) -> None:
+        """Load `pane` from dir_tree if it is stale."""
+        if not self.dir_tree or pane not in self._dirty:
+            return
+        self._dirty.discard(pane)
+        tree = self.dir_tree
+        if pane == "files":
+            files = [n for n in tree.flat if n.type == "f"]
+            self.query_one("#file-list", FileList).set_files(files)
+        elif pane == "subdirs":
+            self.query_one("#subdirs-tree", SubdirsTree).load(tree)
+        elif pane == "types":
+            self.query_one("#types-table", TypesTable).load(tree)
+            self._refresh_mark_indicators()
+        elif pane == "time":
+            self.query_one("#time-table", TimeTable).load(tree)
+            self._refresh_mark_indicators()
+        elif pane == "whatif":
+            self.query_one("#whatif-panel", WhatIfPanel).load(
+                tree, self.node_map)
+
+    def on_tabbed_content_tab_activated(
+            self, event: TabbedContent.TabActivated) -> None:
+        """Central refresh point — fires for keys AND mouse tab clicks."""
+        pane = str(event.pane.id)
+        self._refresh_pane(pane)
+        if pane == "whatif":
+            self.query_one("#whatif-panel", WhatIfPanel).reload()
+        elif pane == "subdirs":
+            self.query_one("#subdirs-tree", SubdirsTree).refresh_labels()
+        elif pane in ("types", "time"):
+            self._refresh_mark_indicators()
 
     def restart_scan(self) -> None:
         self.dir_tree = None
@@ -338,17 +394,16 @@ class StorageMarkApp(App):
         self.scan_count = 0
         self.scan_last_path = ""
         self.partial = False
+        self._dirty.clear()
         self.query_one(TabbedContent).loading = True
         self.scan_worker()
 
     # --------------------------------------------------------- actions --
 
     def action_tab(self, pane: str) -> None:
+        # Per-view refreshes happen in on_tabbed_content_tab_activated,
+        # which fires for this assignment and for mouse tab clicks alike.
         self.query_one(TabbedContent).active = pane
-        if pane == "whatif":
-            self.query_one("#whatif-panel", WhatIfPanel).reload()
-        if pane == "subdirs":
-            self.query_one("#subdirs-tree", SubdirsTree).refresh_labels()
 
     def action_help(self) -> None:
         self.push_screen(HelpScreen())
@@ -445,14 +500,76 @@ class StorageMarkApp(App):
 
     def action_mark_all(self) -> None:
         fl = self.query_one("#file-list", FileList)
+        if fl.is_unfiltered():
+            # No filter active: 'A' would mark the whole tree — confirm.
+            total = sum(n.size_disk for n in fl.rows)
+            def on_confirm(yes: bool | None) -> None:
+                if yes:
+                    n = fl.mark_all_visible()
+                    self.notify(f"Marked {n:,} items")
+                    self._refresh_mark_indicators()
+            self.push_screen(ConfirmScreen(
+                f"[b]No filter is active.[/b]\n"
+                f"Mark ALL {len(fl.rows):,} files "
+                f"({fmt_size(total).strip()})?"), on_confirm)
+            return
         n = fl.mark_all_visible()
         self.notify(f"Marked {n:,} items")
+        self._refresh_mark_indicators()
+
+    def action_unmark_all(self) -> None:
+        fl = self.query_one("#file-list", FileList)
+        n = fl.unmark_all_visible()
+        self.notify(f"Unmarked {n:,} items")
+        self._refresh_mark_indicators()
+
+    def action_marked_only(self) -> None:
+        fl = self.query_one("#file-list", FileList)
+        fl.show_marked_only = not fl.show_marked_only
+        fl.resort()
+        self.query_one(TabbedContent).active = "files"
+        fl.focus()
+        if fl.show_marked_only:
+            self.notify(f"Showing marked only — {len(fl.rows):,} rows "
+                        f"(M again for all files)")
+        else:
+            self.notify(f"Showing all files ({len(fl.rows):,} rows)")
 
     def action_clear_marks(self) -> None:
         self.marked.clear()
-        self.query_one("#file-list", FileList).refresh()
+        fl = self.query_one("#file-list", FileList)
+        if fl.show_marked_only:
+            fl.resort()
+        else:
+            fl.refresh()
         self.query_one("#whatif-panel", WhatIfPanel).reload()
+        self._refresh_mark_indicators()
         self.notify("All marks cleared")
+
+    # ---------------------------------------- marked-count indicators --
+
+    def _refresh_mark_indicators(self) -> None:
+        """Push ● counts into the Types/Time tables. O(len(marked))."""
+        if not self.dir_tree:
+            return
+        by_ext: dict[str, int] = {}
+        marked_files = []
+        for p in self.marked:
+            n = self.node_map.get(p)
+            if n is not None and n.type == "f":
+                marked_files.append(n)
+                ext = n.ext or "(no ext)"
+                by_ext[ext] = by_ext.get(ext, 0) + 1
+        self.query_one("#types-table", TypesTable).refresh_marks(by_ext)
+
+        tt = self.query_one("#time-table", TimeTable)
+        by_bucket: dict[str, int] = {}
+        for label, (field, lo, hi) in tt._ranges.items():
+            by_bucket[label] = sum(
+                1 for n in marked_files
+                if (lo is None or getattr(n, field) >= lo)
+                and (hi is None or getattr(n, field) < hi))
+        tt.refresh_marks(by_bucket)
 
     def action_time_field(self) -> None:
         tt = self.query_one("#time-table", TimeTable)
@@ -478,12 +595,17 @@ class StorageMarkApp(App):
             if mode in ("trash", "delete"):
                 self._progress = ProgressScreen(len(roots), mode)
                 self.push_screen(self._progress)
-                self.delete_worker(mode, roots)
+                # Pass the job via attribute, NOT as @work arguments:
+                # the decorator reprs its args into a worker description,
+                # which is O(len) and was catastrophic pre-repr=False.
+                self._delete_job = (mode, roots)
+                self.delete_worker()
 
         self.push_screen(RemoveScreen(roots, len(self.marked)), on_choice)
 
     @work(thread=True, exclusive=True, group="delete")
-    def delete_worker(self, mode: str, roots: list) -> None:
+    def delete_worker(self) -> None:
+        mode, roots = self._delete_job
         ok: list[str] = []
         failures: list[tuple] = []          # (FileNode, error string)
         act = send_to_trash if mode == "trash" else delete_permanently
@@ -506,8 +628,7 @@ class StorageMarkApp(App):
                     for p in ok if p in self.node_map)
 
         if ok and tree:
-            tree.prune(ok, self.node_map)
-            self.node_map = {n.path: n for n in tree.flat}
+            tree.prune(ok, self.node_map)   # node_map updated in place
             self.marked.difference_update(set(ok))
             # Drop marks that pointed inside removed subtrees
             self.marked.difference_update(
@@ -518,14 +639,21 @@ class StorageMarkApp(App):
             if tree and node not in tree.errors:
                 tree.errors.append(node)
 
-        if tree:   # refresh every view from the pruned tree
-            files = [n for n in tree.flat if n.type == "f"]
-            self.query_one("#file-list", FileList).set_files(files)
-            self.query_one("#subdirs-tree", SubdirsTree).load(tree)
-            self.query_one("#types-table", TypesTable).load(tree)
-            self.query_one("#time-table", TimeTable).load(tree)
-            self.query_one("#whatif-panel", WhatIfPanel).load(
-                tree, self.node_map)
+        if tree:
+            # Mark all views stale, then update only what's visible.
+            # A full SubdirsTree.load() re-materializes the Tree with many
+            # seconds of deferred main-thread work — remove the deleted
+            # nodes surgically instead (keeps expansion state too).
+            self._dirty = {"files", "subdirs", "types", "time", "whatif"}
+            st = self.query_one("#subdirs-tree", SubdirsTree)
+            st.total = tree.total_disk or 1
+            st.remove_paths(set(ok))
+            st.refresh_labels()             # ancestor sizes changed
+            self._dirty.discard("subdirs")
+            active = self.query_one(TabbedContent).active
+            self._refresh_pane(active)
+            if active == "whatif":
+                self.query_one("#whatif-panel", WhatIfPanel).reload()
         self.update_header()
 
         verb = "Trashed" if mode == "trash" else "Deleted"
@@ -551,10 +679,14 @@ class StorageMarkApp(App):
     def on_types_table_mark_ext(self, msg: TypesTable.MarkExt) -> None:
         if not self.dir_tree:
             return
-        nodes = self.dir_tree.ext_map.get(msg.ext, [])
-        for n in nodes:
-            self.marked.add(n.path)
-        self.notify(f"Marked {len(nodes):,} × {msg.ext}")
+        paths = {n.path for n in self.dir_tree.ext_map.get(msg.ext, [])}
+        if paths and paths <= self.marked:      # all already marked → toggle off
+            self.marked.difference_update(paths)
+            self.notify(f"Unmarked {len(paths):,} × {msg.ext}")
+        else:
+            self.marked.update(paths)
+            self.notify(f"Marked {len(paths):,} × {msg.ext}")
+        self._refresh_mark_indicators()
 
     def on_time_table_drill_bucket(self, msg: TimeTable.DrillBucket) -> None:
         fl = self.query_one("#file-list", FileList)
@@ -570,15 +702,20 @@ class StorageMarkApp(App):
         if not self.dir_tree:
             return
         field, lo, hi = msg.field, msg.lo, msg.hi
-        count = 0
+        paths = set()
         for n in self.dir_tree.flat:
             if n.type != "f":
                 continue
             t = getattr(n, field)
             if (lo is None or t >= lo) and (hi is None or t < hi):
-                self.marked.add(n.path)
-                count += 1
-        self.notify(f"Marked {count:,} files ({msg.label})")
+                paths.add(n.path)
+        if paths and paths <= self.marked:      # all already marked → toggle off
+            self.marked.difference_update(paths)
+            self.notify(f"Unmarked {len(paths):,} files ({msg.label})")
+        else:
+            self.marked.update(paths)
+            self.notify(f"Marked {len(paths):,} files ({msg.label})")
+        self._refresh_mark_indicators()
 
     # ---------------------------------------------- whatif / export --
 

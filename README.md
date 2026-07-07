@@ -219,8 +219,9 @@ the default branch; pushing the tag just marks the release).
 | `PgDn` / `PgUp` | Page down / up |
 | `g` / `G` | Jump to top / bottom |
 | `Enter` | Expand directory or drill into selection |
-| `Space` | Mark / unmark — a file, a directory subtree, a whole extension (Types), or an age bucket (Time) |
-| `A` | Mark **all** rows matching the current filter (Files view) |
+| `Space` | Mark / unmark — a file, a directory subtree, a whole extension (Types), or an age bucket (Time). Group marking is a toggle: press again on a fully-marked group to unmark it |
+| `A` / `U` | Mark / unmark **all** rows matching the current filter (Files view). `A` with no filter asks for confirmation first |
+| `M` | Show **only marked** rows in the Files view (toggle) — review exactly what `D` will remove |
 | `x` | Clear all marks |
 | `D` | Remove marked items (Trash or permanent — see below) |
 | `/` | Filter (glob or `~regex`, prefix `!` to invert) |
@@ -276,8 +277,11 @@ built-in themes at runtime.
 
 Mark anything with `Space` (single items, whole directory subtrees, every
 file of an extension from the Types view, a whole age bucket from the Time
-view, or `A` for all filtered rows). The header keeps a running tally:
-`Marked: N items, X GB`.
+view, or `A` for all filtered rows; `U` undoes the same). The header keeps
+a running tally (`Marked: N items, X GB`), the Types and Time tables show
+`●` counts for partially/fully marked groups, and `M` flips the Files view
+to show only marked rows so you can review the exact removal set — with
+full sorting and sizes — before pressing `D`.
 
 Press `D` to open the removal dialog. It shows every top-level item (nested
 marks are de-duplicated automatically), the total size, and warnings for

@@ -42,8 +42,7 @@ class SubdirsTree(Tree[FileNode]):
         self.clear()
         self.root.data = tree.root
         self.root.set_label(self._label(tree.root))
-        self._add_children(self.root)
-        self.root.expand()
+        self.root.expand()      # NodeExpanded handler materializes children
 
     def _label(self, n: FileNode) -> str:
         size = n.subtree_disk if n.type == "d" else n.size_disk
@@ -53,7 +52,13 @@ class SubdirsTree(Tree[FileNode]):
                 f"{bar(frac)} {frac * 100:5.1f}%")
 
     def _add_children(self, node: TreeNode[FileNode]) -> None:
-        """Materialize one level, largest first. Called lazily on expand."""
+        """Materialize exactly one level, largest first, on first expand.
+
+        Strictly just-in-time: pre-populating a level ahead materialized
+        thousands of TreeNodes on big trees — ~20s of main-thread work at
+        ~1M files. allow_expand comes from the FileNode itself, so the
+        expand arrow is correct without materializing grandchildren.
+        """
         if node.children or node.data is None:
             return
         kids = sorted(node.data.children,
@@ -67,8 +72,7 @@ class SubdirsTree(Tree[FileNode]):
                 node.add_leaf(self._label(child), data=child)
 
     def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
-        for child in event.node.children:
-            self._add_children(child)   # pre-populate one level ahead
+        self._add_children(event.node)   # just this node's children
 
     def refresh_labels(self) -> None:
         """Re-render labels (marks may have changed)."""
@@ -78,6 +82,26 @@ class SubdirsTree(Tree[FileNode]):
             for c in node.children:
                 walk(c)
         walk(self.root)
+
+    def remove_paths(self, paths: set[str]) -> int:
+        """Surgically drop deleted nodes from the materialized tree.
+
+        A full load() rebuild at ~1M nodes costs many seconds of deferred
+        main-thread work (Tree re-materialization) — removing just the
+        affected TreeNodes is O(materialized) and keeps expansion state.
+        """
+        doomed: list[TreeNode[FileNode]] = []
+
+        def walk(node: TreeNode[FileNode]) -> None:
+            for c in list(node.children):
+                if c.data is not None and c.data.path in paths:
+                    doomed.append(c)
+                else:
+                    walk(c)
+        walk(self.root)
+        for node in doomed:
+            node.remove()
+        return len(doomed)
 
     def toggle_mark_selected(self) -> None:
         node = self.cursor_node
@@ -114,21 +138,36 @@ class TypesTable(DataTable):
 
     def on_mount(self) -> None:
         self.cursor_type = "row"
-        self.add_columns("EXT", "COUNT", "TOTAL DISK", "AVG", "%", "")
+        cols = self.add_columns("EXT", "COUNT", "MARKED",
+                                "TOTAL DISK", "AVG", "%", "")
+        self._marked_col = cols[2]
+        self._counts: dict[str, int] = {}      # ext -> total file count
 
     def load(self, tree: DirTree) -> None:
         self.clear()
         total = tree.total_disk or 1
+        self._counts.clear()
         rows = []
         for ext, nodes in tree.ext_map.items():
             d = sum(n.size_disk for n in nodes)
             rows.append((ext, len(nodes), d, d // max(1, len(nodes))))
+            self._counts[ext] = len(nodes)
         rows.sort(key=lambda r: r[2], reverse=True)
         for ext, count, disk, avg in rows:
             frac = disk / total
-            self.add_row(ext, f"{count:,}", fmt_size(disk).strip(),
+            self.add_row(ext, f"{count:,}", "", fmt_size(disk).strip(),
                          fmt_size(avg).strip(), f"{frac * 100:5.1f}%",
                          bar(frac), key=ext)
+
+    def refresh_marks(self, marked_by_ext: dict[str, int]) -> None:
+        """Update the MARKED column. O(rows); counts computed by the app."""
+        for ext, total in self._counts.items():
+            n = marked_by_ext.get(ext, 0)
+            text = "" if n == 0 else ("● all" if n >= total else f"● {n:,}")
+            try:
+                self.update_cell(ext, self._marked_col, text)
+            except Exception:
+                pass                       # row pruned since load
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         self.post_message(self.DrillExt(str(event.row_key.value)))
@@ -174,23 +213,50 @@ class TimeTable(DataTable):
 
     def on_mount(self) -> None:
         self.cursor_type = "row"
-        self.add_columns("BUCKET", "FILES", "DISK SIZE", "%", "")
+        cols = self.add_columns("BUCKET", "FILES", "MARKED",
+                                "DISK SIZE", "%", "")
+        self._marked_col = cols[2]
+        self._counts: dict[str, int] = {}      # label -> total file count
 
     def load(self, tree: DirTree) -> None:
         self.clear()
         field = TIME_FIELDS[self.field_idx]
         total = tree.total_disk or 1
-        files = [n for n in tree.flat if n.type == "f"]
+        bks = buckets(datetime.now())
         self._ranges.clear()
-        for label, lo, hi in buckets(datetime.now()):
-            sel = [f for f in files
-                   if (lo is None or getattr(f, field) >= lo)
-                   and (hi is None or getattr(f, field) < hi)]
-            disk = sum(n.size_disk for n in sel)
-            frac = disk / total
+        self._counts.clear()
+
+        # Single pass over ~1M files (was one pass per bucket). Buckets are
+        # ordered oldest→newest; a file belongs to the first bucket whose
+        # upper bound (hi) it is below.
+        counts = [0] * len(bks)
+        disks = [0] * len(bks)
+        for n in tree.flat:
+            if n.type != "f":
+                continue
+            t = getattr(n, field)
+            for i, (_label, lo, hi) in enumerate(bks):
+                if hi is None or t < hi:
+                    counts[i] += 1
+                    disks[i] += n.size_disk
+                    break
+
+        for i, (label, lo, hi) in enumerate(bks):
+            frac = disks[i] / total
             self._ranges[label] = (field, lo, hi)
-            self.add_row(label, f"{len(sel):,}", fmt_size(disk).strip(),
+            self._counts[label] = counts[i]
+            self.add_row(label, f"{counts[i]:,}", "",
+                         fmt_size(disks[i]).strip(),
                          f"{frac * 100:5.1f}%", bar(frac), key=label)
+
+    def refresh_marks(self, marked_by_bucket: dict[str, int]) -> None:
+        for label, total in self._counts.items():
+            n = marked_by_bucket.get(label, 0)
+            text = "" if n == 0 else ("● all" if n >= total else f"● {n:,}")
+            try:
+                self.update_cell(label, self._marked_col, text)
+            except Exception:
+                pass
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         label = str(event.row_key.value)

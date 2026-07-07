@@ -60,6 +60,7 @@ class FileList(ScrollView, can_focus=True):
         self.query = ""
         self.pre_filter: Callable[[FileNode], bool] | None = None  # finders/drills
         self.pre_label = ""
+        self.show_marked_only = False  # 'M': pre-flight review before D
         self.marked = marked          # shared with app
         self.unit_ref = unit_ref      # 1-elem list so app can swap unit globally
 
@@ -85,6 +86,8 @@ class FileList(ScrollView, can_focus=True):
         else:
             fn = lambda n: getattr(n, key)
         src = self.all_files
+        if self.show_marked_only:
+            src = [n for n in src if n.path in self.marked]
         if self.pre_filter is not None:
             src = [n for n in src if self.pre_filter(n)]
         if self.query:
@@ -178,16 +181,34 @@ class FileList(ScrollView, can_focus=True):
             if node:
                 if node.path in self.marked:
                     self.marked.discard(node.path)
+                    if self.show_marked_only:
+                        self.resort()   # row leaves the marked-only view
+                    else:
+                        self.move_cursor(1)
                 else:
                     self.marked.add(node.path)
-                self.move_cursor(1)   # convenience: advance after toggling
+                    self.move_cursor(1)   # convenience: advance after toggling
         else:
             return
         event.stop()
 
     def mark_all_visible(self) -> int:
-        """Mark every row matching the current filter (Phase 1 'A' key)."""
-        for n in self.rows:
-            self.marked.add(n.path)
+        """Mark every row matching the current filter ('A')."""
+        self.marked.update(n.path for n in self.rows)
         self.refresh()
         return len(self.rows)
+
+    def unmark_all_visible(self) -> int:
+        """Unmark every row matching the current filter ('U' — A's inverse)."""
+        n = len(self.rows)
+        self.marked.difference_update(r.path for r in self.rows)
+        if self.show_marked_only:
+            self.resort()               # rows just vanished from this view
+        else:
+            self.refresh()
+        return n
+
+    def is_unfiltered(self) -> bool:
+        """True when 'A' would mark the entire tree (no narrowing active)."""
+        return (not self.query and self.pre_filter is None
+                and not self.show_marked_only)
