@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import os
 import socket
+import threading
 import time
 from datetime import datetime
 
 from textual import work
+from textual.worker import get_current_worker
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -81,6 +83,47 @@ class HelpScreen(ModalScreen):
         yield Static(self.HELP, id="help-box")
 
 
+class ScanInterruptScreen(ModalScreen[str]):
+    """Shown on Ctrl-C while a scan is running.
+
+    Returns 'quit', 'partial', or 'continue'. The scan keeps running in
+    the background while this is open; if it finishes, we auto-dismiss.
+    """
+
+    def compose(self) -> ComposeResult:
+        # A bare Static, like HelpScreen: a width:auto container holding a
+        # default-width Static collapses to an empty box.
+        yield Static(id="interrupt-box")
+
+    def on_mount(self) -> None:
+        self._refresh_text()
+        self.set_interval(0.25, self._tick)
+
+    def _refresh_text(self) -> None:
+        count = getattr(self.app, "scan_count", 0)
+        self.query_one("#interrupt-box", Static).update(
+            f"[b]Scan running — {count:,} objects so far[/b]\n\n"
+            "  [b]Ctrl-Q[/b]    quit StorageMark\n"
+            "  [b]Ctrl-C[/b]    stop scanning, show PARTIAL results\n"
+            "  [b]any key[/b]   keep scanning"
+        )
+
+    def _tick(self) -> None:
+        if getattr(self.app, "dir_tree", None) is not None:
+            self.dismiss("continue")     # scan finished while dialog open
+        else:
+            self._refresh_text()
+
+    def on_key(self, event) -> None:
+        if event.key == "ctrl+q":
+            self.dismiss("quit")
+        elif event.key == "ctrl+c":
+            self.dismiss("partial")
+        else:
+            self.dismiss("continue")
+        event.stop()
+
+
 class PathScreen(ModalScreen[str]):
     BINDINGS = [Binding("escape", "dismiss", "Cancel")]
 
@@ -117,6 +160,8 @@ class StorageMarkApp(App):
     #confirm-input { width: 40; }
     #prog-box { width: 70%; height: auto; margin: 8 8;
         background: $surface; border: solid $warning; padding: 1 2; }
+    #interrupt-box { width: auto; height: auto; margin: 6 8;
+        background: $surface; border: solid $accent; padding: 1 2; }
     """
 
     BINDINGS = [
@@ -137,6 +182,7 @@ class StorageMarkApp(App):
         Binding("x", "clear_marks", "Clear marks", show=False),
         Binding("t", "time_field", "Time field", show=False),
         Binding("D", "delete_marked", "Delete marked"),
+        Binding("ctrl+c", "interrupt", "Interrupt", priority=True, show=False),
     ]
 
     def __init__(self, root: str, scanner_kwargs: dict | None = None) -> None:
@@ -154,6 +200,8 @@ class StorageMarkApp(App):
         self.scan_error: str | None = None
         self.scan_last_path = ""
         self.partial = False
+        self.scanning = False
+        self._scan_abort = threading.Event()
 
     # ------------------------------------------------------------ UI --
 
@@ -233,14 +281,26 @@ class StorageMarkApp(App):
         t0 = time.time()
         records: list[dict] = []
         self.scan_error = None
+        self.scanning = True
+        self._scan_abort.clear()
+        worker = get_current_worker()
+
+        def stop() -> bool:
+            return self._scan_abort.is_set() or worker.is_cancelled
+
         try:
-            for rec in stream_records(self.root_path, **self.scanner_kwargs):
+            for rec in stream_records(self.root_path, should_stop=stop,
+                                      **self.scanner_kwargs):
                 records.append(rec)
                 self.scan_count = len(records)
                 self.scan_last_path = rec.get("path", "")
         except Exception as e:
             self.partial = True
             self.scan_error = str(e)
+        if self._scan_abort.is_set():
+            self.partial = True          # user interrupted: partial results
+        if worker.is_cancelled:
+            return                        # app is shutting down — no UI calls
         self.scan_time = time.time() - t0
         try:
             tree = DirTree.build(records)
@@ -251,6 +311,7 @@ class StorageMarkApp(App):
         self.call_from_thread(self.on_scan_done, tree)
 
     def on_scan_done(self, tree: DirTree | None) -> None:
+        self.scanning = False
         self.dir_tree = tree
         self.node_map = {n.path: n for n in tree.flat} if tree else {}
         self.query_one(TabbedContent).loading = False
@@ -258,6 +319,11 @@ class StorageMarkApp(App):
             self.notify(self.scan_error or "Scan produced no records.",
                         severity="error", timeout=30)
             return
+        if self.partial:
+            self.notify(
+                f"Scan interrupted — showing PARTIAL results "
+                f"({self.scan_count:,} objects). Press r to re-scan.",
+                severity="warning", timeout=12)
         files = [n for n in tree.flat if n.type == "f"]
         self.query_one("#file-list", FileList).set_files(files)
         self.query_one("#subdirs-tree", SubdirsTree).load(tree)
@@ -286,6 +352,33 @@ class StorageMarkApp(App):
 
     def action_help(self) -> None:
         self.push_screen(HelpScreen())
+
+    def action_interrupt(self) -> None:
+        """Ctrl-C: interrupt dialog while scanning; plain quit when idle."""
+        if isinstance(self.screen, ScanInterruptScreen):
+            # Second Ctrl-C: the priority binding consumes the key before
+            # the dialog's on_key can — resolve it here as 'partial'.
+            self.screen.dismiss("partial")
+            return
+        if self.scanning:
+            def on_choice(choice: str | None) -> None:
+                if choice == "quit":
+                    self.action_quit_now()
+                elif choice == "partial":
+                    self._scan_abort.set()
+                # 'continue' / None: scan was never paused — nothing to do
+            self.push_screen(ScanInterruptScreen(), on_choice)
+        elif self.screen is self.screen_stack[0]:
+            self.action_quit_now()        # idle, no modal open: quit (as curses did)
+
+    def action_quit_now(self) -> None:
+        """Quit without leaving the scan thread or C scanner behind."""
+        self._scan_abort.set()
+        self.workers.cancel_all()
+        self.exit()
+
+    async def action_quit(self) -> None:
+        self.action_quit_now()
 
     def action_errors(self) -> None:
         if self.dir_tree and self.dir_tree.errors:

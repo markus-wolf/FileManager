@@ -197,11 +197,15 @@ def stream_records(
     scanner_path: str | None = None,
     binary: bool = True,
     progress_cb: Callable[[int], None] | None = None,
+    should_stop: Callable[[], bool] | None = None,
 ) -> Iterator[dict]:
     """Yield parsed records from the C scanner.
 
     binary=True (default): uses fast struct-based binary protocol.
     binary=False: falls back to NDJSON (slower, useful for debugging).
+    should_stop: polled once per record; when it returns True the stream
+    ends early and the scanner subprocess is terminated immediately
+    (rather than waiting for it to die on SIGPIPE).
     """
     binary_exe = scanner_path or _find_scanner()
     cmd = [binary_exe]
@@ -219,16 +223,29 @@ def stream_records(
         bufsize=1 << 20,   # 1 MB pipe buffer
     )
 
+    stopped = False
     try:
         raw = proc.stdout
         if binary:
-            yield from _stream_binary(raw, progress_cb)
+            source = _stream_binary(raw, progress_cb)
         else:
-            yield from _stream_json(
+            source = _stream_json(
                 io.TextIOWrapper(raw, encoding="utf-8", errors="replace"),
                 progress_cb,
             )
+        for rec in source:
+            if should_stop is not None and should_stop():
+                stopped = True
+                break
+            yield rec
     finally:
+        # Kill the scanner promptly on early exit (interrupt, quit, or the
+        # consumer abandoning the generator) — don't leave it churning.
+        if stopped or proc.poll() is None:
+            try:
+                proc.terminate()
+            except OSError:
+                pass
         proc.stdout.close()
         proc.wait()
 
