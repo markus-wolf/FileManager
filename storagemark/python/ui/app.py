@@ -18,7 +18,7 @@ from textual.binding import Binding
 from textual.containers import Vertical
 from textual.screen import ModalScreen
 from textual.widgets import (DataTable, Footer, Input, Static, TabbedContent,
-                             TabPane)
+                             TabPane, Tabs)
 
 from ... import __version__
 from ..export import export_csv, export_cleanup_script
@@ -57,6 +57,14 @@ class ErrorsScreen(ModalScreen):
         t.add_columns("ERROR", "PATH")
         for n in self.errors:
             t.add_row(n.error, n.path)
+        t.focus()
+
+    def on_key(self, event) -> None:
+        if event.key in ("j", "k"):          # vi cursor keys
+            t = self.query_one("#errors-table", DataTable)
+            (t.action_cursor_down if event.key == "j"
+             else t.action_cursor_up)()
+            event.stop()
 
 
 class HelpScreen(ModalScreen):
@@ -66,13 +74,14 @@ class HelpScreen(ModalScreen):
 
  1–5        switch view          Space   mark / unmark (row, ext, bucket)
  j/k ↑/↓    move cursor          A / U   mark / unmark all filtered (Files)
- PgUp/PgDn  page                 M       show marked only (toggle)
- g/G        top / bottom         x       clear all marks
- s / S      sort / reverse       D       remove marked (Trash / permanent)
- /          filter (Esc clears)  Enter   expand / drill in
- u          size unit            e       export view to CSV
- t          time field (Time)    E       scan errors
- r          re-scan              p       change root path
+ h/l        collapse / expand    M       show marked only (toggle)
+ PgUp/PgDn  page                 x       clear all marks
+ g/G        top / bottom         D       remove marked (Trash / permanent)
+ s / S      sort / reverse       Enter   expand / drill in
+ /          filter (Esc clears)  e       export view to CSV
+ u          size unit            E       scan errors
+ t          time field (Time)    p       change root path
+ r          re-scan
  q          quit                 ?       this help
 """
 
@@ -158,6 +167,14 @@ class StorageMarkApp(App):
     AUTO_FOCUS = "#file-list"
     CSS = """
     #hdr { height: 2; background: $panel; color: auto 100%; }
+    /* Pin the tab area to the space under the header so the layout never
+       exceeds the terminal: otherwise auto-height listings (Tree,
+       DataTable) grow the Screen, and focusing them scrolls the header
+       out of view. Each widget scrolls internally instead. */
+    TabbedContent { height: 1fr; }
+    #subdirs-tree, #file-list, #types-table, #time-table { height: 1fr; }
+    #whatif-panel { height: 1fr; }
+    #whatif-table { height: 1fr; }
     #filter-input { display: none; dock: bottom; height: 1; }
     #filter-input.visible { display: block; }
     #errors-box, #path-box { width: 90%; height: 80%; margin: 2 4;
@@ -458,6 +475,15 @@ class StorageMarkApp(App):
         fl.focus()
 
     def on_key(self, event) -> None:
+        # h/l switch tabs when the tab strip itself has focus (its built-in
+        # bindings only cover the arrow keys)
+        if event.key in ("h", "l") and isinstance(self.focused, Tabs):
+            tabs = self.focused
+            (tabs.action_previous_tab if event.key == "h"
+             else tabs.action_next_tab)()
+            event.stop()
+            return
+
         # Esc in the filter box clears the filter
         box = self.query_one("#filter-input", Input)
         if event.key == "escape" and box.has_focus:

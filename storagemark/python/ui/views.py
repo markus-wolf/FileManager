@@ -115,11 +115,29 @@ class SubdirsTree(Tree[FileNode]):
             node.set_label(self._label(node.data))
 
     def on_key(self, event) -> None:
-        # Space marks (Tree's default binding would toggle expand instead)
-        if event.key == "space":
+        # Space marks (Tree's default binding would toggle expand instead).
+        # h/j/k/l: vi-style cursor control (arrow keys can be flaky).
+        k = event.key
+        if k == "space":
             self.toggle_mark_selected()
-            event.stop()
-            event.prevent_default()
+        elif k == "j":
+            self.action_cursor_down()
+        elif k == "k":
+            self.action_cursor_up()
+        elif k == "l":                       # expand (ranger-style)
+            node = self.cursor_node
+            if node is not None and node.allow_expand and not node.is_expanded:
+                node.expand()
+        elif k == "h":                       # collapse, or jump to parent
+            node = self.cursor_node
+            if node is not None and node.is_expanded and node.allow_expand:
+                node.collapse()
+            elif node is not None and node.parent is not None:
+                self.select_node(node.parent)
+        else:
+            return
+        event.stop()
+        event.prevent_default()
 
 
 # ------------------------------------------------------------------ #
@@ -174,7 +192,11 @@ class TypesTable(DataTable):
         self.post_message(self.DrillExt(str(event.row_key.value)))
 
     def on_key(self, event) -> None:
-        if event.key == "space" and self.cursor_row is not None:
+        if event.key in ("j", "k"):          # vi cursor keys
+            (self.action_cursor_down if event.key == "j"
+             else self.action_cursor_up)()
+            event.stop()
+        elif event.key == "space" and self.cursor_row is not None:
             row_key, _ = self.coordinate_to_cell_key((self.cursor_row, 0))
             self.post_message(self.MarkExt(str(row_key.value)))
             event.stop()
@@ -268,7 +290,11 @@ class TimeTable(DataTable):
         self.post_message(self.DrillBucket(label, *self._ranges[label]))
 
     def on_key(self, event) -> None:
-        if event.key == "space" and self.cursor_row is not None:
+        if event.key in ("j", "k"):          # vi cursor keys
+            (self.action_cursor_down if event.key == "j"
+             else self.action_cursor_up)()
+            event.stop()
+        elif event.key == "space" and self.cursor_row is not None:
             row_key, _ = self.coordinate_to_cell_key((self.cursor_row, 0))
             label = str(row_key.value)
             self.post_message(self.MarkBucket(label, *self._ranges[label]))
@@ -341,11 +367,15 @@ class WhatIfPanel(Vertical):
             t.add_row("✓", fmt_size(size), n.path, key=n.path)
 
     def on_key(self, event) -> None:
-        # Space on a marked row unmarks it (bubbles up from the DataTable)
-        if event.key != "space":
-            return
+        # Space on a marked row unmarks it; j/k move the cursor (vi keys).
         t = self.query_one("#whatif-table", DataTable)
-        if t.has_focus and t.cursor_row is not None and t.row_count:
+        if not t.has_focus:
+            return
+        if event.key in ("j", "k"):
+            (t.action_cursor_down if event.key == "j"
+             else t.action_cursor_up)()
+            event.stop()
+        elif event.key == "space" and t.cursor_row is not None and t.row_count:
             row_key, _ = t.coordinate_to_cell_key((t.cursor_row, 0))
             self.marked.discard(str(row_key.value))
             self.reload()

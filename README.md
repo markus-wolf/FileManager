@@ -215,7 +215,8 @@ the default branch; pushing the tag just marks the release).
 | Key | Action |
 |-----|--------|
 | `1`–`5` | Switch view (tabs are also mouse-clickable) |
-| `j` / `k` | Move cursor down / up |
+| `j` / `k` | Move cursor down / up (vi keys — work in every view, alongside `↑`/`↓`) |
+| `h` / `l` | SubDirs tree: collapse (or jump to parent) / expand — vi/ranger style |
 | `PgDn` / `PgUp` | Page down / up |
 | `g` / `G` | Jump to top / bottom |
 | `Enter` | Expand directory or drill into selection |

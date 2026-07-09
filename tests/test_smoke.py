@@ -72,6 +72,74 @@ def test_ui_smoke():
     asyncio.run(main())
 
 
+def test_vi_keys_all_views():
+    """hjkl work everywhere — arrow keys can be flaky on some setups."""
+    async def main():
+        app = StorageMarkApp(REPO)
+        async with app.run_test(size=(120, 40)) as pilot:
+            await wait_scan(app, pilot)
+
+            # SubDirs tree: j/k move, l expands, h collapses
+            from storagemark.python.ui.views import SubdirsTree, TimeTable
+            await pilot.press("1")
+            tree = app.query_one("#subdirs-tree", SubdirsTree)
+            tree.focus()
+            await pilot.pause()
+            line0 = tree.cursor_line
+            await pilot.press("j", "j")
+            assert tree.cursor_line == line0 + 2, "j did not move tree cursor"
+            await pilot.press("k")
+            assert tree.cursor_line == line0 + 1
+            # find a collapsible dir under the cursor path
+            for _ in range(30):
+                node = tree.cursor_node
+                if node and node.allow_expand:
+                    break
+                await pilot.press("j")
+            node = tree.cursor_node
+            if node and node.allow_expand:
+                was = node.is_expanded
+                await pilot.press("l")
+                assert node.is_expanded or was, "l did not expand"
+                await pilot.press("h")
+                assert not node.is_expanded, "h did not collapse"
+
+            # Types table: j/k move the row cursor
+            await pilot.press("3")
+            tt = app.query_one("#types-table")
+            tt.focus()
+            await pilot.pause()
+            r0 = tt.cursor_row
+            await pilot.press("j")
+            assert tt.cursor_row == r0 + 1, "j did not move types cursor"
+            await pilot.press("k")
+            assert tt.cursor_row == r0
+
+            # Time table: j/k
+            await pilot.press("4")
+            tmt = app.query_one("#time-table", TimeTable)
+            tmt.focus()
+            await pilot.pause()
+            r0 = tmt.cursor_row
+            await pilot.press("j")
+            assert tmt.cursor_row == r0 + 1, "j did not move time cursor"
+
+            # Tab strip: h/l switch tabs when the strip has focus
+            from textual.widgets import TabbedContent, Tabs
+            tabs = app.query_one(Tabs)
+            tabs.focus()
+            await pilot.pause()
+            tc = app.query_one(TabbedContent)
+            before = tc.active
+            await pilot.press("l")
+            await pilot.pause()
+            assert tc.active != before, "l did not switch tab"
+            await pilot.press("h")
+            await pilot.pause()
+            assert tc.active == before, "h did not switch back"
+    asyncio.run(main())
+
+
 def test_marking_workflow():
     async def main():
         app = StorageMarkApp(REPO)
@@ -136,6 +204,24 @@ def test_marking_workflow():
             await pilot.press("M")
             await pilot.pause()
             assert not fl.show_marked_only
+    asyncio.run(main())
+
+
+def test_header_never_scrolls_away():
+    """Focusing a tall listing must not scroll the Screen: auto-height
+    widgets once grew the layout past the terminal, and focus scrolled
+    the 2-line header out of view until a short tab (Time) was shown."""
+    async def main():
+        app = StorageMarkApp(REPO)
+        async with app.run_test(size=(100, 24)) as pilot:
+            await wait_scan(app, pilot)
+            assert app.screen.virtual_size.height <= 24, "layout overflows terminal"
+            for key, wid in [("1", "#subdirs-tree"), ("2", "#file-list"),
+                             ("3", "#types-table"), ("5", "#whatif-panel")]:
+                await pilot.press(key)
+                app.query_one(wid).focus()
+                await pilot.pause(0.2)
+                assert app.screen.scroll_offset.y == 0, f"{wid} scrolled screen"
     asyncio.run(main())
 
 
