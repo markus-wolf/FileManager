@@ -78,13 +78,14 @@ class HelpScreen(ModalScreen):
  PgUp/PgDn  page                 x       clear all marks
  g/G        top / bottom         D       remove marked (Trash / permanent)
  s / S      sort / reverse       Enter   expand / drill in
- /          filter (Esc clears)  y / Y   copy path / marked paths
- u          size unit            e       export view to CSV
- t          time field (Time)    E       scan errors
- r          re-scan              p       change root path
+ /          filter (Esc clears)  y       copy full path of cursor item
+ u          size unit            Y       copy all marked paths
+ t          time field (Time)    e       export view to CSV
+ r          re-scan              E       scan errors
+ p          change root path     q       quit
+ ?          this help
 
  Drag with the mouse to select text; cmd-C (or Ctrl-C) copies it.
- q          quit                 ?       this help
 """
 
     def compose(self) -> ComposeResult:
@@ -355,7 +356,10 @@ class StorageMarkApp(App):
     def show_file_path(self, node) -> None:
         """Render the cursor row's full path. Long paths keep their tail —
         the file name is what you need to read."""
-        line = self.query_one("#file-path", Static)
+        try:
+            line = self.query_one("#file-path", Static)
+        except Exception:
+            return   # a queued CursorMoved can arrive during app teardown
         if node is None:
             line.update("")
             return
