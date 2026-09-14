@@ -1,8 +1,8 @@
 """Virtualized file list — Textual Line API over DirTree.flat.
 
-Renders only visible lines; validated against ~1M rows in
-spike/textual_files_spike.py (widget overhead ~20 MB, frame time
-independent of row count). Never hold one widget per row.
+Renders only visible lines; measured at ~988k rows with ~20 MB of widget
+overhead and frame time independent of row count (spec §14). Never hold
+one widget per row.
 """
 from __future__ import annotations
 

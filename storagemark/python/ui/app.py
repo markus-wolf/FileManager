@@ -1,6 +1,5 @@
 """StorageMark Textual application shell.
 
-Replaces the curses TUI (kept behind --classic during the transition).
 Scan runs in a thread worker; the ~1M-row Files view is virtualized
 (see filelist.py). Small views are ordinary Textual widgets (views.py).
 """
