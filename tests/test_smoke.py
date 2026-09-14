@@ -11,7 +11,7 @@ from storagemark.python.scanner import scan
 from storagemark.python.ui.app import ConfirmScreen, StorageMarkApp
 from storagemark.python.ui.filelist import FileList
 from storagemark.python.ui.views import TypesTable
-from textual.widgets import TabbedContent
+from textual.widgets import Static, TabbedContent
 
 REPO = str(Path(__file__).resolve().parent.parent)
 
@@ -223,6 +223,53 @@ def test_header_never_scrolls_away():
                 await pilot.pause(0.2)
                 assert app.screen.scroll_offset.y == 0, f"{wid} scrolled screen"
     asyncio.run(main())
+
+
+def test_files_view_shows_full_path():
+    """The Files tab status line shows the cursor row's full path."""
+    import shutil
+    import tempfile
+    from pathlib import Path as P
+
+    root = tempfile.mkdtemp(prefix="sm_path_test_")
+    try:
+        deep = P(root) / "a" / "very" / "deeply" / "nested" / "set" / "of" / "dirs"
+        deep.mkdir(parents=True)
+        # '[' in a name is legitimate and would be parsed as Rich markup
+        (deep / "The.Gentlemen.1080p.x264-[YTS.MX].mp4").write_bytes(b"x" * 900)
+        (P(root) / "small.txt").write_bytes(b"y" * 10)
+
+        async def main():
+            app = StorageMarkApp(root)
+            async with app.run_test(size=(60, 20)) as pilot:
+                await wait_scan(app, pilot)
+                fl = app.query_one("#file-list", FileList)
+                fl.focus()
+                await pilot.pause()
+                line = app.query_one("#file-path", Static)
+
+                # sorted by disk size desc → the .mp4 is first
+                shown = str(line.render())
+                node = fl.selected()
+                assert node is not None
+                assert "YTS.MX" in node.path
+                # 60-col terminal, path is longer → left-elided, tail kept
+                assert shown.startswith("…"), shown
+                assert shown.endswith("[YTS.MX].mp4"), shown
+
+                # moving the cursor updates the line
+                await pilot.press("j")
+                await pilot.pause()
+                assert str(line.render()).endswith("small.txt"), line.render()
+
+                # and it follows the cursor back to the top
+                await pilot.press("g")
+                await pilot.pause()
+                shown = str(line.render())
+                assert fl.selected().path.endswith(shown.lstrip("…")), shown
+        asyncio.run(main())
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
 
 
 def test_norton_theme_renders():

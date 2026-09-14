@@ -231,6 +231,7 @@ the default branch; pushing the tag just marks the release).
 | `t` | Toggle time field in Time view (mtime / atime / ctime) |
 | `r` | Re-scan current root |
 | `p` | Change root path |
+| `y` / `Y` | Copy the selected item's full path / all marked paths to the clipboard |
 | `e` | Export current view to CSV |
 | `E` | Show scan errors (when any) |
 | `Ctrl-C` | During a scan: interrupt dialog (see below); when idle: quit |
@@ -262,6 +263,26 @@ Scan running — 412,388 objects so far
   flagged `⚠PARTIAL` in the header. Press `r` to re-scan later.
 - **Any other key** dismisses the dialog; the scan was never paused. If the
   scan finishes while the dialog is open, it closes itself.
+
+---
+
+## Copying text
+
+Two ways to get names and paths out of the app:
+
+- **Keyboard:** `y` copies the full path of the item under the cursor (Files
+  or SubDirs); `Y` copies every marked path, one per line. The Files tab also
+  shows the cursor row's full path in the status line above the key bar.
+- **Mouse:** drag to select any text, then `cmd-C` (or `Ctrl-C`) to copy.
+  `Ctrl-C` copies when a selection exists and otherwise keeps its usual
+  meaning — interrupt a running scan, or quit when idle.
+
+Copies go out two routes, since neither covers every case: an **OSC 52**
+escape sequence, which works over SSH and in iTerm2, Ghostty, kitty and
+WezTerm but is ignored by macOS Terminal.app; and a local helper —
+`pbcopy` on macOS, `wl-copy` / `xclip` / `xsel` on Linux — which covers
+Terminal.app but not remote sessions. The confirmation says which routes
+carried it (`osc52 + pbcopy`).
 
 ---
 

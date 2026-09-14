@@ -21,6 +21,7 @@ from textual.widgets import (DataTable, Footer, Input, Static, TabbedContent,
 
 from ... import __version__
 from ..export import export_csv, export_cleanup_script
+from ..clipboard import native_copy
 from ..model import DirTree, fmt_size, short_hostname
 from ..scanner import stream_records
 from ..trash import TrashError, delete_permanently, send_to_trash
@@ -77,10 +78,12 @@ class HelpScreen(ModalScreen):
  PgUp/PgDn  page                 x       clear all marks
  g/G        top / bottom         D       remove marked (Trash / permanent)
  s / S      sort / reverse       Enter   expand / drill in
- /          filter (Esc clears)  e       export view to CSV
- u          size unit            E       scan errors
- t          time field (Time)    p       change root path
- r          re-scan
+ /          filter (Esc clears)  y / Y   copy path / marked paths
+ u          size unit            e       export view to CSV
+ t          time field (Time)    E       scan errors
+ r          re-scan              p       change root path
+
+ Drag with the mouse to select text; cmd-C (or Ctrl-C) copies it.
  q          quit                 ?       this help
 """
 
@@ -172,6 +175,11 @@ class StorageMarkApp(App):
        out of view. Each widget scrolls internally instead. */
     TabbedContent { height: 1fr; }
     #subdirs-tree, #file-list, #types-table, #time-table { height: 1fr; }
+    #file-path { height: 1; background: $panel; color: auto 100%; }
+    /* Mouse-selected text. The theme-derived default resolves to
+       color == background (invisible); state both explicitly. Bright
+       cyan distinguishes a selection from the cursor bar's #00AAAA. */
+    Screen > .screen--selection { color: #000000; background: #55FFFF; }
     #whatif-panel { height: 1fr; }
     #whatif-table { height: 1fr; }
     #filter-input { display: none; dock: bottom; height: 1; }
@@ -215,6 +223,8 @@ class StorageMarkApp(App):
         Binding("x", "clear_marks", "Clear marks", show=False),
         Binding("t", "time_field", "Time field", show=False),
         Binding("D", "delete_marked", "Delete marked"),
+        Binding("y", "yank_path", "Copy path", show=False),
+        Binding("Y", "yank_marked", "Copy marked paths", show=False),
         Binding("ctrl+c", "interrupt", "Interrupt", priority=True, show=False),
     ]
 
@@ -246,6 +256,10 @@ class StorageMarkApp(App):
                 yield SubdirsTree(self.marked, id="subdirs-tree")
             with TabPane("Files", id="files"):
                 yield FileList(self.marked, self.unit_ref, id="file-list")
+                # Full path of the cursor row (NC-style status line).
+                # markup=False: paths legitimately contain '[', which Rich
+                # would parse as a tag (e.g. "…x264-[YTS.MX].mp4").
+                yield Static(id="file-path", markup=False)
             with TabPane("Types", id="types"):
                 yield TypesTable(id="types-table")
             with TabPane("Time", id="time"):
@@ -297,6 +311,59 @@ class StorageMarkApp(App):
             line2 = f" [b]{self.scan_count:,}[/b] objects   [dim]at: {at}[/dim]"
 
         hdr.update(line1 + "\n" + line2)
+
+    # ------------------------------------------------- clipboard (y/Y) --
+
+    def copy_text(self, text: str, label: str) -> None:
+        """Copy via OSC 52 and, when available, a native helper.
+
+        OSC 52 alone fails in macOS Terminal.app; pbcopy alone fails over
+        SSH. Doing both covers either case, and the notification says
+        which route carried it."""
+        self.copy_to_clipboard(text)                 # OSC 52
+        native = native_copy(text)
+        how = f" (osc52 + {native})" if native else " (osc52)"
+        self.notify(f"Copied {label}{how}")
+
+    def _cursor_node(self):
+        """Node under the cursor in whichever listing is showing."""
+        pane = self.query_one(TabbedContent).active
+        if pane == "files":
+            return self.query_one("#file-list", FileList).selected()
+        if pane == "subdirs":
+            node = self.query_one("#subdirs-tree", SubdirsTree).cursor_node
+            return node.data if node is not None else None
+        return None
+
+    def action_yank_path(self) -> None:
+        node = self._cursor_node()
+        if node is None:
+            self.notify("Nothing under the cursor to copy.")
+            return
+        self.copy_text(node.path, node.name)
+
+    def action_yank_marked(self) -> None:
+        if not self.marked:
+            self.notify("Nothing marked. Use Space / A to mark items first.")
+            return
+        paths = sorted(self.marked)
+        self.copy_text("\n".join(paths), f"{len(paths):,} marked path(s)")
+
+    def on_file_list_cursor_moved(self, msg: FileList.CursorMoved) -> None:
+        self.show_file_path(msg.node)
+
+    def show_file_path(self, node) -> None:
+        """Render the cursor row's full path. Long paths keep their tail —
+        the file name is what you need to read."""
+        line = self.query_one("#file-path", Static)
+        if node is None:
+            line.update("")
+            return
+        width = line.size.width or self.size.width or 80
+        path = node.path
+        if len(path) > width:
+            path = "…" + path[-(width - 1):]
+        line.update(path)
 
     def marked_size(self) -> int:
         """Total disk of marked items; recomputed only when marks change."""
@@ -424,7 +491,18 @@ class StorageMarkApp(App):
         self.push_screen(HelpScreen())
 
     def action_interrupt(self) -> None:
-        """Ctrl-C: interrupt dialog while scanning; plain quit when idle."""
+        """Ctrl-C: copy a mouse selection if there is one, otherwise the
+        interrupt dialog while scanning, otherwise quit.
+
+        The priority binding the interrupt dialog needs also shadows
+        Textual's own ctrl+c -> screen.copy_text, so handle that case
+        first. super+c (cmd-C) reaches copy_text directly, unaffected."""
+        if self.screen.selections:
+            text = self.screen.get_selected_text() or ""
+            if text:
+                self.copy_text(text, f"{len(text):,} chars")
+                self.screen.clear_selection()
+                return
         if isinstance(self.screen, ScanInterruptScreen):
             # Second Ctrl-C: the priority binding consumes the key before
             # the dialog's on_key can — resolve it here as 'partial'.

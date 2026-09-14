@@ -13,11 +13,17 @@ from typing import Callable
 from rich.segment import Segment
 from rich.style import Style
 from textual.geometry import Size
+from textual.message import Message
 from textual.scroll_view import ScrollView
+from textual.selection import Selection
 from textual.strip import Strip
 
 from ..model import FileNode, fmt_size
 from .theme import CGA_BLACK, CGA_CYAN, CGA_YELLOW
+
+# Upper bound on rows pulled out by a single mouse selection (a
+# select-all over ~1M rows would otherwise build a ~100 MB string).
+MAX_SELECT_ROWS = 20_000
 
 SORT_KEYS = ["size_disk", "size_bytes", "mtime", "atime", "name", "ext"]
 SORT_LABELS = {"size_disk": "DISK", "size_bytes": "LOGICAL", "mtime": "MODIFIED",
@@ -43,6 +49,15 @@ def make_filter(query: str) -> Callable[[FileNode], bool]:
 
 class FileList(ScrollView, can_focus=True):
     """Sortable, filterable, markable list over a flat list of FileNodes."""
+
+    class CursorMoved(Message):
+        """The row under the cursor changed — either the cursor moved or
+        the row set was re-sorted/re-filtered under it. Carries the node
+        so the path status line can render it; None when the list is empty."""
+
+        def __init__(self, node: FileNode | None) -> None:
+            super().__init__()
+            self.node = node
 
     def __init__(self, marked: set[str], unit_ref: list[str], **kwargs) -> None:
         super().__init__(**kwargs)
@@ -91,6 +106,7 @@ class FileList(ScrollView, can_focus=True):
         self.cursor = min(self.cursor, max(0, len(self.rows) - 1))
         self.virtual_size = Size(self.size.width, len(self.rows))
         self.refresh()
+        self._announce_cursor()
 
     def sort_label(self) -> str:
         arrow = "↓" if self.sort_rev else "↑"
@@ -101,6 +117,16 @@ class FileList(ScrollView, can_focus=True):
 
     # -------------------------------------------------------- rendering --
 
+    def _row_text(self, n: FileNode) -> str:
+        """The row exactly as displayed. Shared by render_line and
+        get_selection so mouse-selection offsets line up with the text
+        that gets copied."""
+        unit = self.unit_ref[0]
+        mark = "●" if n.path in self.marked else " "
+        return (f"{mark} {fmt_size(n.size_disk, unit):>10}  "
+                f"{fmt_size(n.size_bytes, unit):>10}  "
+                f"{n.mtime:%Y-%m-%d %H:%M}  {n.name}")
+
     def render_line(self, y: int) -> Strip:
         scroll_x, scroll_y = self.scroll_offset
         idx = y + scroll_y
@@ -109,13 +135,9 @@ class FileList(ScrollView, can_focus=True):
         if idx >= len(self.rows):       # Line API does NOT apply it for us
             return Strip.blank(width, base)
         n = self.rows[idx]
-        unit = self.unit_ref[0]
         is_marked = n.path in self.marked
         is_cursor = idx == self.cursor and self.has_focus
-        mark = "●" if is_marked else " "
-        text = (f"{mark} {fmt_size(n.size_disk, unit):>10}  "
-                f"{fmt_size(n.size_bytes, unit):>10}  "
-                f"{n.mtime:%Y-%m-%d %H:%M}  {n.name}")
+        text = self._row_text(n)
         if is_cursor:                   # NC cursor bar: black on cyan
             style = Style(color=CGA_YELLOW if is_marked else CGA_BLACK,
                           bgcolor=CGA_CYAN, bold=is_marked)
@@ -123,9 +145,58 @@ class FileList(ScrollView, can_focus=True):
             style = base + Style(color=CGA_YELLOW, bold=True)
         else:
             style = base
-        return Strip([Segment(text[:width].ljust(width), style)], width)
+        padded = text[:width].ljust(width)
+
+        # Mouse text selection: Line API widgets must paint the highlight
+        # themselves (no Visual does it for us).
+        selection = self.text_selection
+        if selection is not None:
+            span = selection.get_span(idx)
+            if span is not None:
+                x0, x1 = span
+                if x1 == -1:
+                    x1 = width
+                x0, x1 = max(0, x0), min(width, x1)
+                if x0 < x1:
+                    sel_style = style + self.selection_style
+                    return Strip([Segment(padded[:x0], style),
+                                  Segment(padded[x0:x1], sel_style),
+                                  Segment(padded[x1:], style)], width)
+        return Strip([Segment(padded, style)], width)
+
+    def get_selection(self, selection: Selection) -> tuple[str, str] | None:
+        """Text under a mouse selection, for Screen.copy_text.
+
+        Only the selected rows are materialized: the default
+        implementation renders the whole widget, which would build a
+        string over the entire ~1M-row list.
+        """
+        if not self.rows:
+            return None
+        start, end = selection
+        last = len(self.rows) - 1
+        y0 = 0 if start is None else max(0, start.y)
+        y1 = last if end is None else min(last, end.y)
+        if y0 > y1:
+            return None
+        y1 = min(y1, y0 + MAX_SELECT_ROWS - 1)   # bound a select-all
+        lines: list[str] = []
+        for y in range(y0, y1 + 1):
+            span = selection.get_span(y)
+            if span is None:
+                continue
+            x0, x1 = span
+            text = self._row_text(self.rows[y])
+            lines.append(text[x0:] if x1 == -1 else text[x0:x1])
+        return "\n".join(lines), "\n"
 
     # ----------------------------------------------------------- cursor --
+
+    def _announce_cursor(self) -> None:
+        """Tell the app which row is current (drives the path status line).
+        Guarded: resort() runs before mount during the initial load."""
+        if self.is_mounted:
+            self.post_message(self.CursorMoved(self.selected()))
 
     def move_cursor(self, delta: int) -> None:
         if not self.rows:
@@ -138,6 +209,7 @@ class FileList(ScrollView, can_focus=True):
         elif self.cursor >= top + height:
             self.scroll_to(y=self.cursor - height + 1, animate=False)
         self.refresh()
+        self._announce_cursor()
 
     def jump(self, where: str) -> None:
         if not self.rows:
@@ -145,6 +217,7 @@ class FileList(ScrollView, can_focus=True):
         self.cursor = 0 if where == "top" else len(self.rows) - 1
         self.scroll_to(y=self.cursor if where != "top" else 0, animate=False)
         self.refresh()
+        self._announce_cursor()
 
     # ------------------------------------------------------------- keys --
 
