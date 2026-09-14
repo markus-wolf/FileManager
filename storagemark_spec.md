@@ -492,13 +492,137 @@ Afterwards the in-memory tree is pruned and totals update instantly (no
 rescan). Script export remains as the audit path. Warn-don't-block on
 protected roots (`~/Library`, `~/Documents`, `~/Desktop` themselves, …).
 
-**Phase 3 — Finders.** One-keystroke presets that pre-filter the Files view:
-large-and-old (>100 MB, untouched >1 yr, tunable), junk (caches, build
-artifacts: `node_modules`, `__pycache__`, `.venv`, `build/`, `dist/`, logs),
-installers/archives in Downloads (`.dmg`, `.pkg`, `.zip`), big media.
-Same marking/removal flow applies — no new mental model.
+**Phase 3 — Finders (rules).** One-keystroke presets that filter the Files
+view. Superseded by the design in §15: the presets are user-editable rules
+combining size, age **and path patterns**, not a fixed built-in set. The
+built-ins below become the shipped defaults: large-and-old (>100 MB,
+untouched >1 yr), junk (caches, build artifacts: `node_modules`,
+`__pycache__`, `.venv`, `build/`, `dist/`, logs), installers/archives in
+Downloads (`.dmg`, `.pkg`, `.zip`), big media. Same marking/removal flow
+applies — no new mental model.
 
 **Phase 4 — Duplicates.** Same-size candidates → 64 KB partial hash → full
 hash confirm. Grouped view with keep-newest / keep-first strategies; marks
 feed the normal removal flow. Phased last (only piece with real algorithmic
 cost).
+
+---
+
+## 15. Design: Rules (Phase 3, to implement)
+
+Written 2026-09-14; not yet implemented. Replaces the fixed preset list in
+Phase 3 with user-editable rules that match on **path patterns as well as**
+size and age.
+
+### Motivating case, measured
+
+```
+/Users/alex/Library/Application Support/Cursor/CachedExtensionVSIXs/.trash/
+    openai.chatgpt-26.908.40401-darwin-arm64        225.4 MB  mtime 2026-09-12
+    openai.chatgpt-26.908.31748-darwin-arm64        225.4 MB  mtime 2026-09-11
+    openai.chatgpt-26.903.71938-darwin-arm64        221.2 MB  mtime 2026-09-10
+    openai.chatgpt-26.901.22334-darwin-arm64        217.6 MB  mtime 2026-09-04
+    openai.chatgpt-26.825.32147-darwin-arm64        216.2 MB  mtime 2026-08-28
+                                             (6 files, 1.3 GB total)
+```
+
+Superseded extension installers Cursor downloaded, replaced, and moved to a
+discard folder of its own making. Removable; Cursor re-downloads on demand.
+
+**Every one is newer than 90 days.** An age test misses the whole 1.3 GB, so
+path patterns must be able to stand alone rather than refine a size/age rule.
+This is the reason for the redesign.
+
+Scan of `~/Library` (494,203 files, 66.2 GB, 37 s) — the addressable class:
+
+| Pattern | Files | Size | Untouched >90 d |
+|---|---|---|---|
+| `/Caches/` | 163,039 | 15.2 GB | 6.4 GB |
+| `/logs/` | 5,043 | 1.9 GB | 660 MB |
+| `CachedExtensionVSIXs` | 12 | 1.4 GB | 70 MB |
+| `/.trash/` | 6 | 1.3 GB | 0 B |
+| `/Code Cache/` | 21,122 | 676 MB | 378 MB |
+| `/CachedData/` | 243 | 359 MB | 13 MB |
+
+≈19 GB. Caches are regenerable but some cost a re-download — word their
+`why` text accordingly rather than presenting them as free.
+
+### Rules file
+
+`~/.config/storagemark/rules.toml` on both platforms (easier to find and
+edit than `~/Library/Application Support`; note this differs from
+`scanner.py:_user_cache_dir()`, which is platform-split by necessity).
+Written on first run pre-filled with the built-in rules, so authoring is
+copy-and-modify. Parsed with stdlib `tomllib` — no new dependency, and the
+same format as `pyproject.toml`.
+
+```toml
+[[rule]]
+name = "App discard folders"
+why  = "an app's own throw-away pile inside its cache"
+type = "dir"                 # match the folder, not its contents
+name_glob = [".trash"]
+min_size = "10MB"
+```
+
+Conditions, all optional, combined with AND; a list within one condition is
+OR:
+
+| Key | Meaning |
+|---|---|
+| `path_contains` | case-insensitive substrings of the full path — no pattern syntax to learn, and the primitive most users will reach for |
+| `path_glob` | `fnmatch` globs against the full path (note `*` crosses `/`) |
+| `name_glob` | globs against the base name, e.g. `*.dmg` |
+| `min_size`, `max_size` | `"100MB"`, parsed like the old `--threshold` |
+| `older_than`, `newer_than` | `"1y"`, `"90d"`, against mtime |
+| `type` | `"file"` (default) or `"dir"` |
+
+`type = "dir"` matters for the motivating case: marking the one `.trash`
+directory is a single item and a single removal, against six files.
+
+Malformed rules must not break startup — report them in the errors viewer
+and carry on with the rest.
+
+### UI
+
+**Rule picker (`f`).** Lists each rule with match count and total size
+computed against the current scan, plus its `why`:
+
+```
+App discard folders      6 files    1.3 GB   an app's own throw-away pile
+Caches                 163,039     15.2 GB   regenerable, may cost a re-download
+Big and old                 41      8.7 GB   >100 MB, untouched over a year
+```
+
+Choosing one sets the Files view's `pre_filter` (the mechanism the
+Types/Time drill-ins already use) and keeps the rule name and reason on
+screen. Marking and removal are unchanged.
+
+**Rule from the current path (`F`).** With the cursor on a file, offer each
+component of its path as a candidate rule, each with its measured reach:
+
+```
+Make a rule matching…
+  folder named .trash                          1 dir     1.3 GB
+  path contains /CachedExtensionVSIXs/        12 files   1.4 GB
+  path contains /Application Support/Cursor/   ...
+```
+
+The chosen candidate is appended to `rules.toml` with an editable name.
+
+This is the answer to "the path says it's junk but I'm not sure": the
+consequence of a pattern is measured and shown before it is saved, and
+Trash-first removal keeps a wrong guess recoverable. Match counts come from
+the in-memory tree, so each candidate costs one pass over `DirTree.flat`.
+
+### Where the code goes
+
+- `storagemark/python/rules.py` — rule dataclass, TOML load/save, size and
+  duration parsing, `matches(node)`. Framework-agnostic and unit-testable
+  without the UI, like `trash.py` and `clipboard.py`.
+- `storagemark/python/ui/rules_screen.py` — picker and rule-from-path modals.
+- `app.py` — `f` / `F` bindings, wire the chosen rule to
+  `FileList.set_pre_filter(fn, label)`.
+
+Estimate: engine and file ~150 lines, picker ~120, rule-from-path ~100,
+tests ~150.
