@@ -504,7 +504,8 @@ applies — no new mental model.
 **Phase 4 — Duplicates.** Same-size candidates → 64 KB partial hash → full
 hash confirm. Grouped view with keep-newest / keep-first strategies; marks
 feed the normal removal flow. Phased last (only piece with real algorithmic
-cost).
+cost). **Paused 2026-09-15 after a measured review — see §16, which
+supersedes this entry and is the restart point.**
 
 ---
 
@@ -679,3 +680,104 @@ Tests: `tests/test_rules.py` (engine, file handling, round trips),
 `tests/test_rules_ui.py` (both screens, origin invariant, escaping),
 `tests/conftest.py` redirects `STORAGEMARK_CONFIG_DIR` so no test touches
 the real `~/.config/storagemark/rules.toml`.
+
+---
+
+## 16. Review: Duplicates (Phase 4) — paused, restart here
+
+Reviewed 2026-09-15; **not implemented**. This section replaces the Phase 4
+entry in §14. Nothing has been built: no code, no tests. Three decisions at
+the end are open.
+
+### What the feature is
+
+Find files that are exact copies of each other, show them grouped, and let
+the user remove the extra copies through the existing marking and
+Trash-first removal (`Space`, `D`).
+
+### Measured on the author's home folder
+
+StorageMark v1.3.0, macOS, SSD. Scan: 63 s, 1,194,645 files. Metadata only,
+plus one bounded sample of file heads that skipped iCloud placeholders.
+
+| Files considered | Same-size groups (≥2 files) | Files | Must be read to confirm | Upper bound on space freed |
+|---|---|---|---|---|
+| ≥ 1 MB | 1,585 | 5,994 | 33.5 GB | 22.1 GB |
+| ≥ 10 MB | 208 | 668 | 22.7 GB | 14.7 GB |
+
+"Upper bound" assumes every same-size group is a true copy set.
+
+- **The 64 KB head check filters poorly here.** Sample of 400 groups at the
+  1 MB floor: 351 (87%) still matched after hashing the first 64 KB
+  (blake2b). The spec's middle stage removes ~13% of groups, so confirming
+  nearly always means reading whole files.
+- **Head reads are cheap:** 2,574 heads in 1.03 s (≈0.4 ms per file).
+- **Whole-file reads are not measured.** Reading 33.5 GB is estimated at
+  tens of seconds to a few minutes on an SSD. Measure before committing to
+  a UI shape.
+
+### Requirements the original entry missed
+
+1. **iCloud placeholders — hard requirement.** 147 candidates at the 1 MB
+   floor have `SF_DATALESS` (`0x40000000`) set in `st_flags`. Reading one
+   triggers a download. The C scanner is protected by
+   `setiopolicy_np(IOPOL_..._MATERIALIZE_DATALESS_FILES_OFF)`; a Python
+   content read is not. Skip any file with the flag set, checked with
+   `os.lstat(path).st_flags` immediately before reading.
+2. **Copies that are meant to exist.** Candidates at the 1 MB floor inside
+   managed trees: `site-packages/` 722, `/Library/Caches/` 187, `.app/` 40,
+   `node_modules/` 22, `/.git/` 8, `.bundle/` 2 (~16% of candidates). The
+   same wheel installed in three virtual environments is a "duplicate";
+   deleting one breaks that environment. Exclude these by default.
+   Candidate marker list to start from: `.app/`, `.photoslibrary/`,
+   `/.git/`, `node_modules/`, `site-packages/`, `.xcarchive/`,
+   `/Library/Caches/`, `.bundle/`, `.framework/`.
+3. **APFS clones — unverified, bounds the savings figure.** `clonefile`
+   (used by Finder "Duplicate" and `cp -c`) makes files that share extents.
+   They compare equal by content, but removing one frees almost nothing, and
+   `st_blocks` counts the shared blocks once per file. No cheap detection was
+   found. Any "space freed" figure must be labelled an upper bound. Not
+   measured on this disk.
+4. **Choosing the keeper is where harm happens.** Keep-newest could delete an
+   original in `~/Documents` and keep a stray copy in `~/Downloads`. No
+   automatic removal.
+5. **Hard links — low risk.** Zero candidates shared `(dev, inode)`. The
+   scanner already reports repeat links with zero size (§3.5).
+
+### Simplest version, as proposed
+
+- Size floor (see decision 1); skip placeholders (req. 1) and managed trees
+  (req. 2).
+- Group by `size_bytes`, then hash whole files. Drop the 64 KB stage given
+  the 87% survival; or keep it only if the full-read measurement shows it
+  saves meaningful time.
+- Run in the background with a progress bar and a cancel key.
+- A Duplicates view: groups sorted by wasted space (size × (copies − 1)).
+  In a group, `Space` marks a copy and one key marks all but the newest.
+  The user reviews, then `D` removes to Trash as usual.
+
+### Background work — why this differs from rules (§15 note 4)
+
+Rules counting is pure-Python computation. In a thread it held the
+interpreter lock and froze the UI anyway, so it runs directly after a
+`counting…` frame. Hashing is mostly waiting on the disk: `read()` releases
+the lock during I/O, and `hashlib`'s blake2b releases it for large buffers.
+A thread worker should therefore keep the UI responsive here. **This is
+inference from CPython's behaviour, not measured.** First step on restart:
+hash the 10 MB-floor candidates (~22.7 GB) in a thread while probing
+event-loop latency, the same way `test_rules_picker_counts_within_a_bound`
+measures counting.
+
+### Open decisions (recommendations in brackets)
+
+1. **Size floor:** 1 MB (reads 33.5 GB, bound 22.1 GB) or 10 MB (reads
+   22.7 GB, covers 14.7 GB of the 22.1 GB bound). [10 MB, adjustable.]
+2. **Exclude managed trees by default?** [Yes.]
+3. **Keeper selection:** manual review with a "mark all but newest" key; no
+   automatic removal. [Yes.]
+
+### Restart checklist
+
+1. Settle the three decisions above.
+2. Measure whole-file hashing time and UI responsiveness at the 10 MB floor.
+3. Only then design the view and the key bindings.
