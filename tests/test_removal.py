@@ -5,6 +5,7 @@ Trash is redirected to a temp dir so ~/.Trash is never touched.
 import asyncio
 import os
 import shutil
+import sys
 import tempfile
 import time
 from pathlib import Path
@@ -82,8 +83,12 @@ async def run_scenario(mode: str) -> None:
 @pytest.fixture()
 def fake_trash(monkeypatch):
     d = Path(tempfile.mkdtemp(prefix="sm_fake_trash_"))
-    monkeypatch.setattr(trash_mod, "_trash_dir_macos", lambda: d)
-    yield d
+    if sys.platform == "darwin":
+        monkeypatch.setattr(trash_mod, "_trash_dir_macos", lambda: d)
+        yield d
+    else:
+        monkeypatch.setenv("XDG_DATA_HOME", str(d))
+        yield d / "Trash" / "files"
     shutil.rmtree(d, ignore_errors=True)
 
 

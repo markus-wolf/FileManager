@@ -1,5 +1,8 @@
 """Full-scale tests against the real home directory (~1M objects).
 
+The two interrupt tests skip themselves when the home directory is small
+enough to finish scanning before the first Ctrl-C.
+
 Slow (minutes): excluded by default. Run with:  uv run pytest -m slow
 """
 import asyncio
@@ -40,7 +43,9 @@ def test_interrupt_dialog_flow():
         app = StorageMarkApp(HOME)
         async with app.run_test(size=(110, 30)) as pilot:
             await pilot.pause(1.5)
-            assert app.scanning and app.dir_tree is None
+            if not app.scanning:
+                pytest.skip("home directory scanned in under 1.5 s")
+            assert app.dir_tree is None
 
             # dialog opens; any key dismisses; scan continues
             await pilot.press("ctrl+c")
@@ -74,7 +79,8 @@ def test_quit_mid_scan_leaves_no_orphan():
         app = StorageMarkApp(HOME)
         async with app.run_test(size=(110, 30)) as pilot:
             await pilot.pause(1.5)
-            assert app.scanning
+            if not app.scanning:
+                pytest.skip("home directory scanned in under 1.5 s")
             await pilot.press("ctrl+c")
             await pilot.pause()
             await pilot.press("ctrl+q")

@@ -3,14 +3,15 @@
 No UI — these run against small real directory trees built in tmp.
 """
 import os
+import sys
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
 
-from storagemark.python.model import DirTree
-from storagemark.python.rules import (BUILTIN_RULES, Rule, RuleError,
+from storagemark.python.model import DirTree, FileNode
+from storagemark.python.rules import (BUILTIN_RULES, LINUX_RULES, Rule, RuleError,
                                       append_rule, ensure_rules_file,
                                       evaluate, load_rules, parse_days,
                                       parse_size)
@@ -274,7 +275,7 @@ def test_evaluate_matches_individual_rules(cursor_tree):
 def test_builtin_rules_are_all_valid():
     """Every built-in must survive a TOML round trip — they double as the
     worked examples users copy."""
-    for rule in BUILTIN_RULES:
+    for rule in BUILTIN_RULES + LINUX_RULES:
         assert rule.name and rule.why
         text = rule.to_toml()
         assert text.startswith("[[rule]]")
@@ -285,6 +286,38 @@ def test_builtin_rules_are_all_valid():
         assert again.type == rule.type
         assert again.name_glob == rule.name_glob
         assert again.path_contains == rule.path_contains
+
+
+def _synthetic(path: str, type_: str, size: int) -> FileNode:
+    epoch = datetime(2020, 1, 1)
+    return FileNode(path=path, name=path.rsplit("/", 1)[-1], type=type_,
+                    size_bytes=size, size_disk=size, inode=0, dev=0, uid=0,
+                    mtime=epoch, atime=epoch, ctime=epoch, depth=0, ext="",
+                    hardlink_of="", error="", children=[], parent=None,
+                    subtree_bytes=size, subtree_disk=size)
+
+
+@pytest.mark.parametrize("rule_name,path,type_,size,want", [
+    # measured on Ubuntu 24.04: ~/.cache and the journal were missed
+    ("Caches", "/home/alex/.cache", "d", 20 << 20, True),
+    ("Caches", "/home/alex/.thumbnails", "d", 20 << 20, True),
+    ("Caches", "/var/cache", "d", 150 << 20, True),
+    ("Desktop Trash", "/home/alex/.local/share/Trash", "d", 5 << 20, True),
+    ("Desktop Trash", "/home/alex/.local/share/Trash/files", "d", 5 << 20, False),
+    ("Desktop Trash", "/home/alex/Trash", "d", 5 << 20, False),
+    ("System journal", "/var/log/journal", "d", 466 << 20, True),
+    ("System journal", "/var/log/journal", "d", 10 << 20, False),
+    ("System journal", "/var/log/journal/abc/system.journal", "f", 466 << 20, False),
+])
+def test_linux_locations(rule_name, path, type_, size, want):
+    rule = next(r for r in BUILTIN_RULES + LINUX_RULES if r.name == rule_name)
+    assert rule.matches(_synthetic(path, type_, size)) is want
+
+
+def test_linux_rules_offered_only_on_linux():
+    names = {r.name for r in BUILTIN_RULES}
+    on_linux = sys.platform.startswith("linux")
+    assert all((r.name in names) == on_linux for r in LINUX_RULES)
 
 
 @pytest.mark.parametrize("name", [

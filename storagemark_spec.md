@@ -72,6 +72,34 @@ not `//usr` (`dirname("//usr")` is `//`, which matches no node). Until v1.3.2
 the scanner emitted `//usr`, and a scan of `/` lost every entry below the root
 on both macOS and Linux. Guarded by `test_scanning_filesystem_root_keeps_its_children`.
 
+**Virtual filesystems (Linux only).** `walk()` receives the parent's `st_dev`.
+When a directory below the root has a different device — a mount point — the
+scanner calls `statfs(2)` and does not descend if `f_type` is one of proc,
+sysfs, tmpfs/devtmpfs, devpts, cgroup, cgroup2, debugfs, securityfs, tracefs,
+bpf, pstore, efivarfs, hugetlbfs, autofs, binfmt_misc, squashfs, ramfs or
+nsfs. The mount point itself is not emitted. The scan root is never skipped,
+so `storagemark /dev/shm` still works. Magic values were checked against
+`<linux/magic.h>` on Ubuntu 24.04.
+
+Measured on Ubuntu 24.04.5, 3.4 GB in use, normal user, `--once /`:
+
+| | disk | logical | files | errors |
+|---|---|---|---|---|
+| v1.3.2 | 3.4 GB | 131,075.5 GB | 183,497 | 1,020 |
+| with the skip | 3.4 GB | 3.3 GB | 112,728 | 45 |
+| `-x` | 3.3 GB | 3.2 GB | 112,145 | 43 |
+
+The 128 TiB came from `/proc/kcore` (`st_size` 140737471594496, 0 blocks).
+The difference from `-x` is `/boot` and `/boot/efi`, separate partitions
+that `-x` drops. That is why the skip is by type rather than a default `-x`:
+a separate `/home` would vanish the same way. On macOS `-x` from `/` stays
+on the sealed system volume and misses `/Users`. A tmpfs and a loop-mounted
+ext4 under `/mnt` were checked by hand: the tmpfs was skipped, the ext4
+contents were listed.
+
+snap images (squashfs) are skipped because the `.snap` files under
+`/var/lib/snapd/snaps` already count that space.
+
 ### 3.2 Record fields (per entry)
 
 | Field | Type | Source |
@@ -86,7 +114,7 @@ on both macOS and Linux. Guarded by `test_scanning_filesystem_root_keeps_its_chi
 | `uid` | uint32 | `st_uid` |
 | `mtime` | int64 | `st_mtime` (epoch seconds) |
 | `atime` | int64 | `st_atime` |
-| `ctime` | int64 | `st_ctime` / `st_birthtime` (macOS) |
+| `ctime` | int64 | `st_birthtime` on macOS; `st_ctime` (inode change time) elsewhere |
 | `depth` | uint16 | depth from root |
 | `hardlink_of` | string | path of first occurrence if hard-link duplicate |
 | `error` | string | non-empty if stat/opendir failed |
@@ -312,7 +340,9 @@ BUCKET       FILES  MARKED  DISK SIZE  %
 
 - Five fixed buckets. Boundaries: 730, 365, 182 and 30 days before now.
 - `t` switches which timestamp is used: modified (`mtime`, default), accessed
-  (`atime`), or `ctime` — birth time on macOS (§3.2).
+  (`atime`), or `ctime` — birth time on macOS, inode change time on Linux
+  (§3.2). The notification names which: `ctime (created)` or
+  `ctime (status changed)`.
 - `MARKED`, Enter and `Space` behave as in Types, per bucket.
 
 ### 5.5 What-If — the marked set
@@ -590,10 +620,21 @@ Sorting and filtering operate on the in-memory tree (no re-scan). Re-scan is tri
 | Feature | macOS | Linux |
 |---|---|---|
 | Directory walk | `opendir` / `readdir` | same |
-| Birth time | `st_birthtimespec.tv_sec` | unavailable (shows `--`) |
+| `ctime` field | birth time, `st_birthtimespec.tv_sec` | inode change time, `st_ctime` |
 | Filesystem boundary | `-x` uses `st_dev` comparison | same |
+| Virtual filesystems | none to skip | skipped by `statfs` type at mount points (§3.1) |
 | Disk usage | `st_blocks * 512` | same |
 | Binary output | `write(STDOUT_FILENO, ...)` | same |
+| C dialect | `-std=gnu11` | `-std=gnu11`: glibc hides `lstat` and `strnlen` under `-std=c11`, and GCC 14 makes the implicit declarations errors |
+| Trash | rename into `~/.Trash` | freedesktop.org layout under `$XDG_DATA_HOME/Trash` with `.trashinfo` |
+| Clipboard helper | `pbcopy` | `wl-copy`, `xclip`, `xsel`; OSC 52 on both |
+| Protected folders (warn) | `/Users`, `/Library`, `~/Documents`, … | `/home`, `/usr`, `/etc`, `/var`, `/boot`, `/opt`, `/srv`, `/root`, `~/.config`, `~/.local`, `~/.ssh`, `~/.gnupg` — both sets apply on both systems |
+| Extra built-in rules | — | Desktop Trash, System journal (§15) |
+
+Tested: macOS 26 (arm64, APFS) and Ubuntu 24.04.5 (x86_64, ext4, GCC 13.3,
+Python 3.13.15 via uv). On Ubuntu the fast suite passes with one skip
+(`test_clipboard` needs `pbcopy`); the two slow interrupt tests skip because
+a small home directory finishes scanning before the first Ctrl-C.
 
 ---
 
@@ -626,7 +667,8 @@ trash) — Trash is the undo. Permanent delete requires typing `yes`.
 Progress bar for large sets; per-item failures feed the errors viewer.
 Afterwards the in-memory tree is pruned and totals update instantly (no
 rescan). Script export remains as the audit path. Warn-don't-block on
-protected roots (`~/Library`, `~/Documents`, `~/Desktop` themselves, …).
+protected roots (`~/Library`, `~/Documents`, `~/Desktop` themselves, …;
+Linux set in §13).
 
 **Phase 3 — Finders (rules).** One-keystroke presets that filter the Files
 view. Superseded by the design in §15: the presets are user-editable rules
@@ -804,6 +846,15 @@ Found while implementing; each one changed the code.
 9. **Pseudo-extensions are not offered.** `splitext` on
    `openai.chatgpt-26.908.40401-darwin-arm64` gives `.40401-darwin-arm64`;
    only 1–6 alphanumeric, non-numeric extensions are offered.
+10. **Linux locations.** On Ubuntu 24.04 the macOS-derived built-ins missed
+    `~/.cache` (named with a dot) and the systemd journal. `Caches` now also
+    matches `.cache` and `.thumbnails`. Two rules exist only in
+    `LINUX_RULES` and are appended to `BUILTIN_RULES` on Linux, so the macOS
+    picker does not list rules that cannot match: **Desktop Trash**
+    (`path_glob = */.local/share/trash`) and **System journal**
+    (`path_glob = /var/log/journal`, >50 MB). The journal's `why` points to
+    `journalctl --vacuum-size`: the files are root-owned and journald keeps
+    them open. `F` also skips `home`, `mnt` and `media` as folder names.
 
 Measured on the author's home folder (1.4M items), built-in rules:
 Caches 50 folders / 22.1 GB, Build artifacts 103 folders / 14.9 GB,

@@ -18,13 +18,17 @@ from setuptools import setup
 from setuptools.command.build_py import build_py
 
 C_DIR   = Path(__file__).parent / "storagemark" / "c"
+COMPILER_HINT = ("Install Xcode Command Line Tools (xcode-select --install)."
+                 if sys.platform == "darwin" else
+                 "Install a C compiler, e.g. sudo apt install build-essential "
+                 "(Debian/Ubuntu) or sudo dnf install gcc make (Fedora).")
 BINARY  = C_DIR / "storagescanner"
 SOURCES = ["storagescanner.c", "hashset.c"]
 
 
 def compile_scanner() -> None:
     cc = os.environ.get("CC", "cc")
-    cmd = [cc, "-O2", "-Wall", "-std=c11", "-o", str(BINARY)] + \
+    cmd = [cc, "-O2", "-Wall", "-std=gnu11", "-o", str(BINARY)] + \
           [str(C_DIR / s) for s in SOURCES]
     print("storagemark: compiling scanner ->", " ".join(cmd))
     subprocess.run(cmd, check=True)
@@ -37,8 +41,7 @@ class BuildPyWithScanner(build_py):
         except (subprocess.CalledProcessError, FileNotFoundError, OSError) as e:
             sys.stderr.write(
                 "\nstoragemark WARNING: could not compile the C scanner "
-                f"({e}).\nInstall Xcode Command Line Tools "
-                "(xcode-select --install).\nStorageMark will try to compile "
+                f"({e}).\n{COMPILER_HINT}\nStorageMark will try to compile "
                 "it automatically on first run.\n\n"
             )
         super().run()

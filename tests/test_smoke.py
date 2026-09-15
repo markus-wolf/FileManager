@@ -235,8 +235,10 @@ def test_files_view_shows_full_path():
     try:
         deep = P(root) / "a" / "very" / "deeply" / "nested" / "set" / "of" / "dirs"
         deep.mkdir(parents=True)
+        # 900 KB, not 900 B: on ext4 both files would round up to one 4 KB
+        # block and the sort order would be a tie.
         # '[' in a name is legitimate and would be parsed as Rich markup
-        (deep / "The.Gentlemen.1080p.x264-[YTS.MX].mp4").write_bytes(b"x" * 900)
+        (deep / "The.Gentlemen.1080p.x264-[YTS.MX].mp4").write_bytes(b"x" * 900_000)
         (P(root) / "small.txt").write_bytes(b"y" * 10)
 
         async def main():

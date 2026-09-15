@@ -32,7 +32,7 @@ from .marks import MarkSet
 from .remove import ProgressScreen, RemoveScreen, top_level_roots
 from .rules_screen import RuleFromPathScreen, RulesScreen
 from .theme import NORTON_THEME
-from .views import SubdirsTree, TimeTable, TypesTable, WhatIfPanel, TIME_FIELDS
+from .views import SubdirsTree, TimeTable, TypesTable, WhatIfPanel, TIME_FIELDS, TIME_FIELD_LABELS
 
 HOSTNAME = short_hostname()
 
@@ -797,7 +797,7 @@ class StorageMarkApp(App):
         tt.field_idx = (tt.field_idx + 1) % len(TIME_FIELDS)
         if self.dir_tree:
             tt.load(self.dir_tree)
-        self.notify(f"Time field: {TIME_FIELDS[tt.field_idx]}")
+        self.notify(f"Time field: {TIME_FIELD_LABELS[TIME_FIELDS[tt.field_idx]]}")
 
     # --------------------------------------------------- removal (D) --
 

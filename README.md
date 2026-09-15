@@ -43,7 +43,9 @@ uv tool uninstall storagemark
 ```
 
 > **Note on the C scanner.** The fast scanner is compiled from C at install
-> time, which needs Xcode Command Line Tools on macOS (`xcode-select --install`).
+> time, which needs Xcode Command Line Tools on macOS (`xcode-select --install`)
+> or a C compiler on Linux (`sudo apt install build-essential` on Debian/Ubuntu,
+> `sudo dnf install gcc make` on Fedora).
 > If a compiler isn't available during install, StorageMark compiles the scanner
 > automatically the first time you run it. No compiler ever needed if a working
 > binary is already present.
@@ -117,9 +119,30 @@ sudo chmod -R a+rX /opt/uv
 
 ## Requirements
 
-- macOS (tested on 15.7 and 26) or Linux
+- macOS (tested on 15.7 and 26) or Linux (tested on Ubuntu 24.04, x86_64, GCC 13)
 - uv (which provides Python 3.13 automatically)
-- A C compiler — Xcode Command Line Tools on macOS (`cc` / `clang`)
+- A C compiler — Xcode Command Line Tools on macOS (`cc` / `clang`); `gcc` or
+  `clang` on Linux
+
+### Linux notes
+
+- **Scanning `/`** skips virtual filesystems — `/proc`, `/sys`, `/run`,
+  `/dev`, tmpfs, cgroup, snap images and similar. Without that, `/proc/kcore`
+  alone reports 128 TiB and `/proc` adds about a thousand permission errors.
+  Real disks mounted below `/` (a separate `/home`, `/boot`) are still
+  scanned; `-x` is not needed. On Ubuntu 24.04 with 3.4 GB in use:
+  3.4 GB found, 45 errors as a normal user.
+- **Trash** follows the freedesktop.org layout, `~/.local/share/Trash`,
+  whether or not a desktop is installed. A file manager's *Restore* works.
+  Items on another filesystem cannot be moved there; use permanent delete.
+- **Clipboard** over SSH uses OSC 52, which needs a terminal that accepts it
+  (iTerm2, kitty, WezTerm, Ghostty, Windows Terminal). Locally, install
+  `wl-copy` (Wayland) or `xclip` / `xsel` (X11).
+- **`ctime`** in the Time view is the inode change time (it moves on
+  rename, chmod or a new hard link). On macOS the same column is the
+  creation time.
+- Two extra built-in rules: **Desktop Trash** and **System journal**
+  (see the rules table).
 
 ---
 
@@ -186,7 +209,8 @@ the default branch; pushing the tag just marks the release).
 # Limit scan depth
 ./run.sh /Users/alex -d 4
 
-# Stay within one filesystem
+# Stay within one filesystem (on macOS, / -x stays on the read-only
+# system volume and misses /Users — scan ~ instead)
 ./run.sh / -x
 
 # Skip directories
@@ -285,12 +309,14 @@ Built-in rules:
 | Rule | Finds |
 |------|-------|
 | App discard folders | folders named `.trash` / `.trashes`, >1 MB |
-| Caches | folders named `Caches`, `Cache`, `CachedData`, `Code Cache`, `CachedExtensionVSIXs`, >10 MB |
+| Caches | folders named `Caches`, `Cache`, `.cache`, `.thumbnails`, `CachedData`, `Code Cache`, `CachedExtensionVSIXs`, >10 MB |
 | Build artifacts | folders named `node_modules`, `__pycache__`, `.venv`, `venv`, `build`, `dist`, `target`, `.pytest_cache`, `.mypy_cache`, >10 MB |
 | Big and old | files >100 MB, untouched for over a year |
 | Installers and archives | `.dmg`, `.pkg`, `.iso`, `.zip`, `.tar.gz`, `.tgz`, `.xz`, >50 MB |
 | Big media | `.mov`, `.mp4`, `.mkv`, `.avi`, `.m4v`, `.wav`, `.raw`, `.tiff`, >100 MB |
 | Logs | `*.log`, >1 MB |
+| Desktop Trash (Linux) | `~/.local/share/Trash`, >1 MB |
+| System journal (Linux) | `/var/log/journal`, >50 MB — shrink with `sudo journalctl --vacuum-size=200M`, do not delete the files |
 
 Built-ins find *candidates*, not guaranteed junk — "Big media" in particular
 is where the space is, not what to delete. Read the list before pressing `D`;
@@ -425,7 +451,8 @@ full sorting and sizes — before pressing `D`.
 
 Press `D` to open the removal dialog. It shows every top-level item (nested
 marks are de-duplicated automatically), the total size, and warnings for
-recently-modified items or protected folders (`~/Documents`, `~/Library`, …).
+recently-modified items or protected folders (`~/Documents`, `~/Library`,
+`/usr`, `~/.ssh`, …).
 
 Two ways out, deliberately asymmetric:
 

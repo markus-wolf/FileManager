@@ -123,8 +123,7 @@ def _compile_scanner(out_path: Path) -> bool:
     """Compile the C scanner from shipped sources into out_path.
 
     Returns True on success. Used as a runtime fallback when the
-    prebuilt binary is absent (e.g. Xcode CLT wasn't available at
-    install time).
+    prebuilt binary is absent (e.g. no C compiler at install time).
     """
     sources = [_C_DIR / "storagescanner.c", _C_DIR / "hashset.c"]
     if not all(s.exists() for s in sources):
@@ -136,7 +135,7 @@ def _compile_scanner(out_path: Path) -> bool:
     if not os.access(out_path.parent, os.W_OK):
         return False
     cc = os.environ.get("CC", "cc")
-    cmd = [cc, "-O2", "-std=c11", "-o", str(out_path), *map(str, sources)]
+    cmd = [cc, "-O2", "-std=gnu11", "-o", str(out_path), *map(str, sources)]
     try:
         subprocess.run(cmd, check=True, capture_output=True)
     except (subprocess.CalledProcessError, FileNotFoundError, OSError):
@@ -163,8 +162,11 @@ def _find_scanner() -> str:
 
     raise FileNotFoundError(
         "storagescanner binary not found and could not be compiled.\n"
-        "Install Xcode Command Line Tools, then re-run:\n"
-        "    xcode-select --install"
+        + ("Install Xcode Command Line Tools, then re-run:\n"
+           "    xcode-select --install" if sys.platform == "darwin" else
+           "Install a C compiler, then re-run:\n"
+           "    sudo apt install build-essential    # Debian/Ubuntu\n"
+           "    sudo dnf install gcc make           # Fedora")
     )
 
 

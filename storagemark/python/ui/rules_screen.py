@@ -136,8 +136,8 @@ def candidates_for(node: FileNode, home: str | None = None) -> list[Rule]:
                         name_glob=("*" + glob.escape(ext),)))
 
     # Generic path segments that would match unrelated folders everywhere.
-    skip = {"users", "volumes", "private", "var", "tmp",
-            os.path.basename(home).lower()}
+    skip = {"users", "volumes", "private", "var", "tmp", "home", "mnt",
+            "media", os.path.basename(home).lower()}
     ancestor = node.parent
     while ancestor is not None and len(out) < 8:
         name = ancestor.name

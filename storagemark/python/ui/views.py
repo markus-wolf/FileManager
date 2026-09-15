@@ -5,6 +5,7 @@ These four are small-row-count views, so ordinary widgets are fine.
 """
 from __future__ import annotations
 
+import sys
 from datetime import datetime, timedelta
 
 from textual.containers import Vertical
@@ -212,6 +213,14 @@ class TypesTable(DataTable):
 # ------------------------------------------------------------------ #
 
 TIME_FIELDS = ["mtime", "atime", "ctime"]
+# The scanner fills ctime with the birth time on macOS; Linux has only the
+# inode status-change time, which moves on chmod, rename and link count.
+TIME_FIELD_LABELS = {
+    "mtime": "mtime (modified)",
+    "atime": "atime (accessed)",
+    "ctime": "ctime (created)" if sys.platform == "darwin"
+             else "ctime (status changed)",
+}
 
 
 def buckets(now: datetime):

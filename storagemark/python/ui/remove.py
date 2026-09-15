@@ -24,11 +24,17 @@ YOUNG_DAYS = 30
 
 # Marking these *themselves* (not contents inside them) gets a warning.
 _HOME = Path.home()
+# Both platforms' lists apply everywhere; a path absent on this OS never matches.
 PROTECTED_ROOTS = {
-    str(_HOME), "/", "/Users", "/Applications", "/Library", "/System",
+    str(_HOME), "/",
+    # macOS
+    "/Users", "/Applications", "/Library", "/System",
     *(str(_HOME / d) for d in
       ("Library", "Documents", "Desktop", "Downloads",
        "Pictures", "Movies", "Music", "Applications")),
+    # Linux
+    "/home", "/usr", "/etc", "/var", "/boot", "/opt", "/srv", "/root",
+    *(str(_HOME / d) for d in (".config", ".local", ".ssh", ".gnupg")),
 }
 
 

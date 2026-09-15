@@ -12,6 +12,9 @@
 #ifdef __APPLE__
 #include <sys/resource.h>   /* setiopolicy_np, dataless-file I/O policy */
 #endif
+#ifdef __linux__
+#include <sys/vfs.h>        /* statfs: skip virtual filesystems */
+#endif
 #include "hashset.h"
 
 /* ------------------------------------------------------------------ */
@@ -200,7 +203,52 @@ static int should_skip(const char *name) {
 
 static HashSet *inodes;
 
-static void walk(const char *path, const char *name, int depth) {
+#ifdef __linux__
+/* Mount points of virtual filesystems are not descended into. Without this a
+   scan of / on Linux walks /proc and /sys (about 1,000 errors on a small
+   server), and /proc/kcore alone reports 128 TiB of logical size. tmpfs
+   (/run, /dev, /dev/shm) holds RAM, not disk. squashfs is skipped because on
+   Ubuntu those mounts are snaps, whose image files are already counted under
+   /var/lib/snapd/snaps. Values verified against <linux/magic.h>; configfs,
+   mqueue and fusectl are absent from that header but are only mounted under
+   /sys or /dev, which this list already skips.
+
+   Unlike -x this keeps real disks mounted below the root, such as a separate
+   /home partition. */
+static int is_virtual_fs(const char *path) {
+    static const unsigned long virtual_types[] = {
+        0x9fa0UL,      /* proc      */
+        0x62656572UL,  /* sysfs     */
+        0x01021994UL,  /* tmpfs, devtmpfs */
+        0x1cd1UL,      /* devpts    */
+        0x27e0ebUL,    /* cgroup    */
+        0x63677270UL,  /* cgroup2   */
+        0x64626720UL,  /* debugfs   */
+        0x73636673UL,  /* securityfs */
+        0x74726163UL,  /* tracefs   */
+        0xcafe4a11UL,  /* bpf       */
+        0x6165676cUL,  /* pstore    */
+        0xde5e81e4UL,  /* efivarfs  */
+        0x958458f6UL,  /* hugetlbfs */
+        0x0187UL,      /* autofs: also avoids triggering automounts */
+        0x42494e4dUL,  /* binfmt_misc */
+        0x73717368UL,  /* squashfs (snaps) */
+        0x858458f6UL,  /* ramfs     */
+        0x6e736673UL,  /* nsfs      */
+    };
+    struct statfs sfs;
+    if (statfs(path, &sfs) != 0)
+        return 0;
+    unsigned long type = (unsigned long)sfs.f_type;
+    for (size_t i = 0; i < sizeof virtual_types / sizeof virtual_types[0]; i++)
+        if (type == virtual_types[i])
+            return 1;
+    return 0;
+}
+#endif
+
+static void walk(const char *path, const char *name, int depth,
+                 dev_t parent_dev) {
     struct stat st;
     int rc = opt_follow ? stat(path, &st) : lstat(path, &st);
 
@@ -218,6 +266,16 @@ static void walk(const char *path, const char *name, int depth) {
     else if (S_ISDIR(st.st_mode))  type = 'd';
     else if (S_ISLNK(st.st_mode))  type = 'l';
     else                            type = 'o';
+
+#ifdef __linux__
+    /* A device change marks a mount point; only then is statfs worth calling.
+       The root itself is always scanned, even if the user points at /proc. */
+    if (depth > 0 && type == 'd' && st.st_dev != parent_dev
+            && is_virtual_fs(path))
+        return;
+#else
+    (void)parent_dev;
+#endif
 
     uint64_t size_disk = (uint64_t)st.st_blocks * 512ULL;
 
@@ -274,7 +332,7 @@ static void walk(const char *path, const char *name, int depth) {
         if (n < 0 || (size_t)n >= sizeof(child))
             continue;
 
-        walk(child, ent->d_name, depth + 1);
+        walk(child, ent->d_name, depth + 1, st.st_dev);
     }
     closedir(dir);
 }
@@ -346,7 +404,7 @@ int main(int argc, char **argv) {
         printf("{\"_storagemark\":1,\"root\":\"%s\"}\n", root);
     }
 
-    walk(root, root, 0);
+    walk(root, root, 0, root_dev);
 
     if (opt_binary) fflush(stdout);
     hs_destroy(inodes);

@@ -299,8 +299,9 @@ BUILTIN_RULES: list[Rule] = [
          type="dir", name_glob=(".trash", ".trashes"), min_size=parse_size("1MB")),
     Rule(name="Caches",
          why="regenerable, but some entries cost a re-download",
-         type="dir", name_glob=("caches", "cache", "cacheddata",
-                                "code cache", "cachedextensionvsixs"),
+         type="dir", name_glob=("caches", "cache", ".cache", ".thumbnails",
+                                "cacheddata", "code cache",
+                                "cachedextensionvsixs"),
          min_size=parse_size("10MB")),
     Rule(name="Build artifacts",
          why="rebuilt by the toolchain from source",
@@ -325,6 +326,23 @@ BUILTIN_RULES: list[Rule] = [
          why="diagnostics; apps rotate or recreate them",
          name_glob=("*.log", "*.log.*"), min_size=parse_size("1MB")),
 ]
+
+# Paths that only exist on Linux; offered there only, so the macOS picker
+# does not list rules that can never match.
+LINUX_RULES: list[Rule] = [
+    Rule(name="Desktop Trash",
+         why="already deleted; empty it from the file manager",
+         type="dir", path_glob=("*/.local/share/trash",),
+         min_size=parse_size("1MB")),
+    Rule(name="System journal",
+         why="systemd logs; shrink with sudo journalctl --vacuum-size=200M "
+             "rather than deleting files",
+         type="dir", path_glob=("/var/log/journal",),
+         min_size=parse_size("50MB")),
+]
+
+if sys.platform.startswith("linux"):
+    BUILTIN_RULES += LINUX_RULES
 
 # ------------------------------------------------------------------ #
 # The user's rules file                                               #
