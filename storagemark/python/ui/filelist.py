@@ -66,7 +66,7 @@ class FileList(ScrollView, can_focus=True):
         self.cursor = 0
         self.sort_idx = 0
         self.sort_rev = True
-        self.query = ""
+        self.filter_query = ""
         self.pre_filter: Callable[[FileNode], bool] | None = None  # finders/drills
         self.pre_label = ""
         self.show_marked_only = False  # 'M': pre-flight review before D
@@ -99,8 +99,8 @@ class FileList(ScrollView, can_focus=True):
             src = [n for n in src if n.path in self.marked]
         if self.pre_filter is not None:
             src = [n for n in src if self.pre_filter(n)]
-        if self.query:
-            match = make_filter(self.query)
+        if self.filter_query:
+            match = make_filter(self.filter_query)
             src = [n for n in src if match(n)]
         self.rows = sorted(src, key=fn, reverse=self.sort_rev)
         self.cursor = min(self.cursor, max(0, len(self.rows) - 1))
@@ -276,5 +276,5 @@ class FileList(ScrollView, can_focus=True):
 
     def is_unfiltered(self) -> bool:
         """True when 'A' would mark the entire tree (no narrowing active)."""
-        return (not self.query and self.pre_filter is None
+        return (not self.filter_query and self.pre_filter is None
                 and not self.show_marked_only)

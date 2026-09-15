@@ -548,7 +548,7 @@ class StorageMarkApp(App):
         if event.input.id != "filter-input":
             return
         fl = self.query_one("#file-list", FileList)
-        fl.query = event.value
+        fl.filter_query = event.value
         fl.resort()
         self.query_one(TabbedContent).active = "files"
         event.input.remove_class("visible")
@@ -570,7 +570,7 @@ class StorageMarkApp(App):
         if event.key == "escape" and box.has_focus:
             box.value = ""
             fl = self.query_one("#file-list", FileList)
-            fl.query = ""
+            fl.filter_query = ""
             fl.set_pre_filter(None)
             fl.resort()
             box.remove_class("visible")

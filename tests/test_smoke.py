@@ -288,3 +288,63 @@ def test_norton_theme_renders():
                 assert color in svg, f"{color} missing from render"
             assert "#ff5555" not in svg and "#aa0000" not in svg
     asyncio.run(main())
+
+
+def test_no_attribute_shadows_textual_api():
+    """Instance attributes must not shadow Textual methods/properties.
+
+    Hit three times: `.tree` on the App, and `.query` on FileList — a
+    double-click called Widget.text_select_all(), which calls
+    widget.query("*"), which was our filter string ('str' object is not
+    callable). Compare every instance attribute against the framework
+    base classes and fail on any collision.
+    """
+    async def main():
+        app = StorageMarkApp(REPO)
+        async with app.run_test(size=(100, 24)) as pilot:
+            await wait_scan(app, pilot)
+            offenders = []
+            for obj in [app, app.screen, *app.screen.query("*")]:
+                # only our own classes; skip framework-provided widgets
+                mro = type(obj).__mro__
+                ours = [c for c in mro
+                        if c.__module__.startswith("storagemark")]
+                if not ours:
+                    continue
+                base = mro[len(ours)]          # first framework class
+                for name in vars(obj):
+                    if name.startswith("_"):
+                        continue
+                    inherited = getattr(base, name, None)
+                    if inherited is None:
+                        continue
+                    if callable(inherited) or isinstance(inherited, property):
+                        offenders.append(
+                            f"{type(obj).__name__}.{name} shadows "
+                            f"{base.__name__}.{name}")
+            assert not offenders, "; ".join(offenders)
+    asyncio.run(main())
+
+
+def test_double_and_triple_click_do_not_crash():
+    """Double-click selects the whole widget, triple-click its container.
+    Both route through Widget.query(), so a shadowed name crashes here."""
+    async def main():
+        app = StorageMarkApp(REPO)
+        async with app.run_test(size=(100, 24)) as pilot:
+            await wait_scan(app, pilot)
+            fl = app.query_one("#file-list", FileList)
+            fl.focus()
+            await pilot.pause()
+
+            await pilot.double_click(fl, offset=(10, 3))
+            await pilot.pause()
+            assert app.screen.selections, "double-click selected nothing"
+            text = app.screen.get_selected_text() or ""
+            assert text, "double-click produced no text"
+
+            app.screen.clear_selection()
+            await pilot.triple_click(fl, offset=(10, 3))
+            await pilot.pause()
+            assert app.screen.selections, "triple-click selected nothing"
+    asyncio.run(main())
