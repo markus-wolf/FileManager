@@ -66,6 +66,12 @@ UI.
 ### 3.1 Responsibility
 Walk a root path recursively using `opendir` / `readdir`, calling `lstat(2)` on every entry. Emit one record per file/directory.
 
+Child paths are joined without doubling a trailing `/`. The Python side finds
+each node's parent with `os.path.dirname`, so children of `/` must be `/usr`,
+not `//usr` (`dirname("//usr")` is `//`, which matches no node). Until v1.3.2
+the scanner emitted `//usr`, and a scan of `/` lost every entry below the root
+on both macOS and Linux. Guarded by `test_scanning_filesystem_root_keeps_its_children`.
+
 ### 3.2 Record fields (per entry)
 
 | Field | Type | Source |

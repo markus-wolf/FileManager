@@ -256,6 +256,12 @@ static void walk(const char *path, const char *name, int depth) {
         return;
     }
 
+    /* Don't double a trailing slash: children of "/" must be "/usr", not
+       "//usr" — Python finds each parent with os.path.dirname, and
+       dirname("//usr") is "//", which matches no node. */
+    size_t path_len = strlen(path);
+    const char *sep = (path_len > 0 && path[path_len - 1] == '/') ? "" : "/";
+
     struct dirent *ent;
     while ((ent = readdir(dir)) != NULL) {
         if (strcmp(ent->d_name, ".") == 0 || strcmp(ent->d_name, "..") == 0)
@@ -264,7 +270,7 @@ static void walk(const char *path, const char *name, int depth) {
             continue;
 
         char child[4096];
-        int n = snprintf(child, sizeof(child), "%s/%s", path, ent->d_name);
+        int n = snprintf(child, sizeof(child), "%s%s%s", path, sep, ent->d_name);
         if (n < 0 || (size_t)n >= sizeof(child))
             continue;
 

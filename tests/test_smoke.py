@@ -438,3 +438,19 @@ def test_subdirs_root_row_keeps_the_path_tail(tmp_path):
             child = app.dir_tree.root.children[0]
             assert tree._label(child)[2:34].rstrip() == child.name
     asyncio.run(main())
+
+
+def test_scanning_filesystem_root_keeps_its_children():
+    """Children of "/" were emitted as "//usr"; os.path.dirname("//usr") is
+    "//", which matched no node, so every top-level entry was dropped and a
+    scan of / reported one directory and nothing else (both platforms,
+    v1.3.1). One level deep is enough to exercise the join and stays fast."""
+    import os
+    tree = DirTree.build(scan("/", max_depth=1))
+    assert tree.root.path == "/"
+    children = tree.root.children
+    assert len(children) >= 3, f"root has {len(children)} children"
+    for child in children:
+        assert not child.path.startswith("//"), child.path
+        assert os.path.dirname(child.path) == "/", child.path
+        assert child.parent is tree.root
