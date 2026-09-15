@@ -13,27 +13,51 @@
 ## 2. Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                   Python layer                      │
-│  ┌──────────┐  ┌──────────────┐  ┌───────────────┐ │
-│  │  curses  │  │  data model  │  │  what-if engine│ │
-│  │   TUI    │  │  (FileNode   │  │               │ │
-│  │          │  │   tree)      │  │               │ │
-│  └────┬─────┘  └──────┬───────┘  └───────┬───────┘ │
-│       └───────────────┴──────────────────┘         │
-│                        │                            │
-│              ┌─────────▼──────────┐                │
-│              │  scanner interface  │                │
-│              └─────────┬──────────┘                │
-└────────────────────────┼────────────────────────────┘
-                         │  subprocess (binary pipe)
-                ┌────────▼────────┐
-                │  storagescanner │
-                │  (C binary)     │
-                └─────────────────┘
+┌────────────────────────────────────────────────────────────────────┐
+│ Python package storagemark/python/                                 │
+│                                                                    │
+│  ui/            Textual application                                │
+│    app.py         header, tabs, footer, key routing, overlays      │
+│    filelist.py    Files view: virtualized list, ~1M rows           │
+│    views.py       SubDirs tree, Types, Time, What-If               │
+│    remove.py      removal confirm + progress                       │
+│    rules_screen.py  rule picker (f), rule from path (F)            │
+│    marks.py       mark set    theme.py  Norton Commander palette   │
+│         │                                                          │
+│         ▼  (none of the modules below import Textual)              │
+│  model.py      FileNode, DirTree: build, prune                     │
+│  rules.py      rule matching, ~/.config/storagemark/rules.toml     │
+│  trash.py      platform Trash / permanent delete                   │
+│  clipboard.py  OSC 52 + pbcopy / wl-copy / xclip / xsel            │
+│  export.py     CSV, JSON, cleanup script                           │
+│  scanner.py    runs the C scanner, parses its record stream        │
+│         │                                                          │
+└─────────┼──────────────────────────────────────────────────────────┘
+          │  subprocess; stdout pipe carrying binary records (§3.3)
+   ┌──────▼─────────┐
+   │ storagescanner │  C: opendir/readdir + lstat per entry
+   └────────────────┘
 ```
 
-The C scanner emits a compact binary record stream (default) or newline-delimited JSON (`-j` flag for debugging). The Python layer parses this into a `FileNode` tree, then drives the TUI and all analysis.
+**Data flow.** `scanner.py:stream_records` starts `storagescanner -b` and
+parses its binary records. `DirTree.build` (§4) turns them into the tree.
+The UI runs the scan in a thread worker (`app.py:scan_worker`); reading the
+pipe waits on I/O, so the header's object counter keeps updating while the
+scan runs (asserted by `test_interrupt_dialog_flow`). Removal runs in a
+second thread worker (`delete_worker`), then `DirTree.prune` updates the
+tree in place instead of rescanning.
+
+**Scanner output.** With `-b` the scanner writes the binary format — what
+`scanner.py` always passes. Without `-b` it writes newline-delimited JSON,
+kept for inspecting scanner output by hand. There is no separate JSON flag.
+
+**Non-interactive mode.** `storagemark --once` (`__main__.py`) scans, builds
+the tree and prints a summary as text, JSON or CSV without starting the UI
+(§8).
+
+**Dependency direction.** `ui/` imports the modules beneath it; none of those
+import Textual. `rules.py`, `trash.py` and `clipboard.py` are tested without a
+UI.
 
 ---
 
@@ -160,101 +184,159 @@ Raw records are freed immediately after build to halve peak memory usage.
 
 ---
 
-## 5. Views (TUI Panels)
+## 5. Views
 
-All views share a common header and footer:
+Examples below were captured from StorageMark v1.3.0 scanning the
+`storagemark/` source folder with two files marked. Sizes are small for that
+reason; the layout is what matters.
 
-```
-╔══════════════════════════════════════════════════════╗
-║  StorageMark  /Users/alex/projects    Scanned: 42.3s ║
-║  Total: 47.2 GB  Files: 183,441  Dirs: 12,008        ║
-╠══════════════════════════════════════════════════════╣
-║  [1]SubDirs  [2]Files  [3]Types  [4]Time  [5]WhatIf  ║
-╚══════════════════════════════════════════════════════╝
-   ... view content ...
-[q]uit  [/]filter  [s]ort  [Space]mark  [e]xport  [?]help
-```
-
-### 5.1 View 1 — SubDirectory Tree
-
-Interactive tree. Each row shows:
-```
-  ▶ node_modules/          34.1 GB  ████████████████░░░░  72%
-    ├─ .cache/              8.2 GB  ████░░░░░░░░░░░░░░░░  17%
-    └─ packages/           25.9 GB  ████████████░░░░░░░░  55%
-```
-
-- `▶` / `▼` to expand/collapse
-- Bar scaled to root total
-- Columns: name, disk size, bar, % of parent
-- Sortable by: size (default), name, file count, last modified
-
-### 5.2 View 2 — File List
-
-Flat or tree-relative file list:
-```
-  SIZE(DISK)   SIZE(LOG)   MODIFIED            NAME
-  12.4 GB      11.9 GB     2025-03-14 09:22    video_raw.mov
-   4.1 GB       4.0 GB     2024-11-02 17:44    backup.tar.gz
-   ...
-```
-
-- Paginated (j/k to scroll, PgUp/PgDn)
-- Sortable: disk size, logical size, mtime, atime, name, extension
-- Filter bar (`/`) accepts glob or regex
-- Can be pre-filtered by extension (drill-in from View 3) or age bucket (drill-in from View 4)
-
-### 5.3 View 3 — File Type Summary
+### 5.0 Screen layout
 
 ```
-  EXT       COUNT    TOTAL DISK    AVG SIZE    % OF TOTAL
-  .mov        127     28.4 GB      229 MB      60.2%
-  .tar.gz      14      8.1 GB      594 MB      17.1%
-  (no ext)  4,201      3.3 GB      814 KB       7.0%
-  .py       9,834      1.2 GB      128 KB       2.5%
-  ...
+ StorageMark  baia:/Users/alex/Claude/FileManager/storagemark    Scanned: 0.0s                v1.3.0
+ Total: 464.0 KB  Files: 41  Dirs: 7  Errors: 0  Marked: 2 items, 100.0 KB
+ SubDirs  Files  Types  Time  What-If
+   … active view …
+ q Quit  ? Help  1 SubDirs  2 Files  3 Types  4 Time  5 What-If  / Filter  e CSV  E Errors  …
 ```
 
-Selecting an extension drills into View 2 pre-filtered for that type.
+- **Header, line 1:** host and root path, scan status, version right-aligned.
+  While scanning the status reads `SCANNING…  N objects`. After an
+  interrupted scan the path is preceded by `⚠PARTIAL`. On a narrow terminal
+  the path is cut with `…`; the version is never pushed off the line.
+- **Header, line 2:** totals and the error count. `Marked: N items, X` when
+  anything is marked; `Rule: <name> (Esc clears)` while a rule is applied.
+  During a scan this line shows the object count and the path being walked.
+- **Tabs:** `SubDirs`, `Files`, `Types`, `Time`, `What-If`, selected with
+  `1`–`5`, the mouse, or `h`/`l` when the tab strip has focus. The app opens
+  on **Files**.
+- **Footer:** the Textual `Footer`, showing only the bindings marked visible:
+  `q ? 1–5 / e E r p u D f`. It is cut off on narrow terminals. Every key is
+  listed in the `?` overlay (§5.6).
+- **Colours:** the Norton Commander theme (`ui/theme.py`) — CGA blue
+  panels, cyan chrome, yellow marks, orange warnings.
 
-### 5.4 View 4 — Time Browser
-
-Heatmap-style summary + sortable list. Time buckets:
-
-```
-  BUCKET            FILES    DISK SIZE
-  > 2 years old     8,304    22.1 GB   ████████████████████
-  1–2 years old     4,102     9.4 GB   ████████░░░░░░░░░░░░
-  6–12 months        892      4.8 GB   ████░░░░░░░░░░░░░░░░
-  1–6 months         541      2.1 GB   ██░░░░░░░░░░░░░░░░░░
-  < 1 month          203    431 MB     ░░░░░░░░░░░░░░░░░░░░
-```
-
-Toggle between mtime / atime / ctime with `t`. Selecting a bucket drills into View 2 pre-filtered.
-
-### 5.5 View 5 — What-If Simulator
-
-Mark files/dirs for hypothetical removal using `[space]` in any view. This view shows:
+### 5.1 SubDirs — directory tree
 
 ```
-  WHAT-IF SCENARIO
-  ─────────────────────────────────────────────────────
-  Marked for removal:
-    ✓  node_modules/           34.1 GB
-    ✓  *.mov files (127)       28.4 GB
-
-  Would free:  62.5 GB  (of 47.2 GB used = 132%)
-  After:        0.0 GB  remaining (root becomes empty)
-
-  Conflicts / warnings:
-    ! node_modules/ overlaps with marked *.mov (3 files)
-    ! src/ is < 30 days old
-
-  [Enter] Confirm & show rm commands   [x] Clear all marks
-  [p] Export plan to file              [ESC] Back
+  /Users/alex/Claude/FileManager/s   464.0 KB  ████████████████████ 100.0%
+      python                             380.0 KB  ████████████████░░░░  81.9%
+      c                                   76.0 KB  ███░░░░░░░░░░░░░░░░░  16.4%
+      __init__.py                          4.0 KB  ░░░░░░░░░░░░░░░░░░░░   0.9%
 ```
 
-Confirmation produces a shell script (`storagemark_cleanup_<timestamp>.sh`).
+- Row: mark (`●`), name cut to 32 characters, size, 20-cell bar, percentage.
+- **The bar and percentage are shares of the whole scan, not of the parent
+  folder.**
+- Size is `display_size`: a folder's whole subtree, a file's own allocation.
+- Children are listed largest first. The order is fixed; `s` does not apply
+  here.
+- Built lazily (`Tree`): a folder's children are created when it is first
+  expanded. Deleting items removes their rows without rebuilding the tree,
+  so expanded folders stay expanded.
+- Keys: `j`/`k` move; `l` expands; Enter toggles; `h` collapses, or moves
+  to the parent if already collapsed or on a file; `Space` marks the item (a folder mark covers
+  its whole subtree); `y` copies its path; `F` builds a rule from it.
+
+### 5.2 Files — flat file list
+
+```
+●    60.0 KB     57.8 KB  2026-09-15 21:35  app.cpython-313.pyc
+●    40.0 KB     39.0 KB  2026-09-15 21:33  app.py
+     36.0 KB     34.4 KB  2026-07-07 22:15  storagescanner
+     28.0 KB     25.8 KB  2026-09-15 14:04  rules.cpython-313.pyc
+/Users/alex/Claude/FileManager/storagemark/python/ui/__pycache__/app.cpython-313.pyc
+```
+
+- Row: mark, size on disk, logical size, modification time, name. There is
+  no column header row.
+- The last line is the **path status line**: the full path of the cursor row,
+  cut from the left so the name stays visible.
+- Virtualized with Textual's Line API over `DirTree.flat`: only visible rows
+  are rendered, so the view handles about a million rows (§14).
+- **Sort:** `s` cycles disk size → logical size → modified → accessed → name
+  → extension; `S` reverses. Default: disk size, largest first. **The
+  current sort is not shown on screen** (`FileList.sort_label` exists but has
+  no caller).
+- **What the list contains** — each narrows the one before, and all combine:
+  1. all scanned files, or a rule's matches, which may include folders (`f`,
+     §15);
+  2. an extension or age bucket chosen in Types or Time (Enter there);
+  3. marked items only (`M`);
+  4. the `/` filter: part of the name, `~regex`, or `!` to invert. Esc clears
+     it.
+  Esc in the list itself clears an applied rule.
+- Keys: `Space` marks and moves down; `A` / `U` mark or unmark every row in the
+  current list (`A` with nothing narrowing it asks first); `y` / `Y` copy the
+  cursor path or all marked paths; `u` changes the size unit; `F` builds a rule
+  from the cursor row. Mouse drag selects text for copying.
+
+### 5.3 Types — by extension
+
+```
+EXT       COUNT  MARKED  TOTAL DISK  AVG       %      
+.pyc      17     ● 1     232.0 KB    13.6 KB   50.0%  ██████████░░░░░░░░░░
+.py       17     ● 1     156.0 KB     9.2 KB   33.6%  ███████░░░░░░░░░░░░░
+(no ext)  2               40.0 KB    20.0 KB    8.6%  ██░░░░░░░░░░░░░░░░░░
+.c        2               20.0 KB    10.0 KB    4.3%  █░░░░░░░░░░░░░░░░░░░
+```
+
+- One row per extension, largest total first. `(no ext)` collects files
+  without one.
+- `MARKED`: `● all` when every file of that extension is marked, `● N` when
+  some are, blank otherwise.
+- Keys: Enter opens Files narrowed to that extension; `Space` marks every file
+  of the extension, or unmarks them all if they are already all marked.
+
+### 5.4 Time — by age
+
+```
+BUCKET       FILES  MARKED  DISK SIZE  %      
+> 2 years    0              0 B          0.0%  ░░░░░░░░░░░░░░░░░░░░
+1–2 years    0              0 B          0.0%  ░░░░░░░░░░░░░░░░░░░░
+6–12 months  0              0 B          0.0%  ░░░░░░░░░░░░░░░░░░░░
+1–6 months   29             240.0 KB    51.7%  ██████████░░░░░░░░░░
+< 1 month    12     ● 2     224.0 KB    48.3%  ██████████░░░░░░░░░░
+```
+
+- Five fixed buckets. Boundaries: 730, 365, 182 and 30 days before now.
+- `t` switches which timestamp is used: modified (`mtime`, default), accessed
+  (`atime`), or `ctime` — birth time on macOS (§3.2).
+- `MARKED`, Enter and `Space` behave as in Types, per bucket.
+
+### 5.5 What-If — the marked set
+
+```
+WHAT-IF  marked: 2 items   would free: 100.0 KB (21.6% of total)   after: 364.0 KB
+! app.cpython-313.pyc is < 30 days old
+! app.py is < 30 days old
+✓  60.0 KB  /Users/alex/Claude/FileManager/storagemark/python/ui/__pycache__/app.cpython-313.pyc
+✓  40.0 KB  /Users/alex/Claude/FileManager/storagemark/python/ui/app.py
+```
+
+- Summary line: count, space that removing the marks would free, and what
+  would remain.
+- Warnings, in orange: items modified in the last 30 days, and items inside a
+  folder that is also marked. At most 8 are shown. With no warnings, the line
+  lists the keys instead.
+- Table: one row per marked item with its size and full path.
+- Keys: `Space` unmarks the row; `x` clears every mark; `D` removes the marked
+  items (§14 Phase 2); Enter writes a cleanup shell script (§9).
+
+### 5.6 Overlays
+
+Modal screens opened over the views. Esc closes each unless noted.
+
+| Key | Overlay | Purpose |
+|---|---|---|
+| `?` | Help | every key binding, and how to use rules; scrolls with `j`/`k` on short terminals |
+| `E` | Scan errors | paths that could not be read, with the reason |
+| `p` | Change path | type a new root folder to scan |
+| `A` with nothing narrowing the list | Confirm | `y` marks every file in the scan; any other key cancels |
+| `Ctrl-C` during a scan | Interrupt | `Ctrl-Q` quits, `Ctrl-C` again keeps partial results, any other key continues (§12) |
+| `D` | Remove | the marked set with warnings; `t` moves it to Trash, typing `yes` deletes permanently; a progress screen follows (§14) |
+| `f` | Rules | every rule with its match count and size; Enter applies one (§15) |
+| `F` | Rule from path | candidate rules for the cursor item with their reach; Enter saves one (§15) |
 
 ---
 
