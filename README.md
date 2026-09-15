@@ -11,20 +11,33 @@ Traverses a directory tree using a fast C scanner and presents results in a term
 StorageMark installs as a [uv](https://docs.astral.sh/uv/) tool. uv manages its
 own isolated Python — you do **not** need a system Python, pyenv, or a venv.
 
-**1. Install uv** (once per machine):
+**1. Install a C compiler and git** (once per machine). The compiler builds
+the scanner; uv needs git to fetch the repository.
+
+```sh
+xcode-select --install                       # macOS
+sudo apt install build-essential git curl    # Debian / Ubuntu
+sudo dnf install gcc make git                # Fedora
+```
+
+**2. Install uv** (once per machine):
 
 ```sh
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-**2. Install StorageMark:**
+Open a new shell afterwards (or `source ~/.local/bin/env`) so `~/.local/bin`
+is on your `PATH`.
+
+**3. Install StorageMark:**
 
 ```sh
 uv tool install git+https://github.com/markus-wolf/FileManager
 ```
 
 That builds the C scanner and puts a `storagemark` command on your `PATH`
-(usually `~/.local/bin`). Now run it from anywhere:
+(usually `~/.local/bin`). Checked on Ubuntu 24.04 with v1.4.0. Now run it
+from anywhere:
 
 ```sh
 storagemark ~
@@ -43,12 +56,10 @@ uv tool uninstall storagemark
 ```
 
 > **Note on the C scanner.** The fast scanner is compiled from C at install
-> time, which needs Xcode Command Line Tools on macOS (`xcode-select --install`)
-> or a C compiler on Linux (`sudo apt install build-essential` on Debian/Ubuntu,
-> `sudo dnf install gcc make` on Fedora).
-> If a compiler isn't available during install, StorageMark compiles the scanner
-> automatically the first time you run it. No compiler ever needed if a working
-> binary is already present.
+> time (step 1). If a compiler isn't available during install, the install
+> still succeeds and StorageMark compiles the scanner the first time you run
+> it, or tells you which package to install. No compiler is needed once a
+> working binary is present.
 
 ---
 
@@ -131,13 +142,15 @@ sudo chmod -R a+rX /opt/uv
   alone reports 128 TiB and `/proc` adds about a thousand permission errors.
   Real disks mounted below `/` (a separate `/home`, `/boot`) are still
   scanned; `-x` is not needed. On Ubuntu 24.04 with 3.4 GB in use:
-  3.4 GB found, 45 errors as a normal user.
+  3.4 GB found, 45 errors as a normal user. The errors are root-only
+  folders; for a complete scan run `sudo ~/.local/bin/storagemark /`
+  (`sudo` does not search `~/.local/bin`).
 - **Trash** follows the freedesktop.org layout, `~/.local/share/Trash`,
   whether or not a desktop is installed. A file manager's *Restore* works.
   Items on another filesystem cannot be moved there; use permanent delete.
 - **Clipboard** over SSH uses OSC 52, which needs a terminal that accepts it
   (iTerm2, kitty, WezTerm, Ghostty, Windows Terminal). Locally, install
-  `wl-copy` (Wayland) or `xclip` / `xsel` (X11).
+  `wl-clipboard` (Wayland) or `xclip` / `xsel` (X11).
 - **`ctime`** in the Time view is the inode change time (it moves on
   rename, chmod or a new hard link). On macOS the same column is the
   creation time.
