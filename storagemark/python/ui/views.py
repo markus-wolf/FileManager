@@ -49,7 +49,12 @@ class SubdirsTree(Tree[FileNode]):
         size = n.display_size
         frac = size / self.total
         mark = "●" if n.path in self.marked else " "
-        return (f"{mark} {n.name:<32.32} {fmt_size(size):>10}  "
+        name = n.name
+        if n.parent is None and len(name) > 32:
+            # The root's name is its full path; cutting from the right left
+            # "/Users/alex/Claude/FileManager/s". Keep the tail, which names it.
+            name = "…" + name[-31:]
+        return (f"{mark} {name:<32.32} {fmt_size(size):>10}  "
                 f"{bar(frac)} {frac * 100:5.1f}%")
 
     def _add_children(self, node: TreeNode[FileNode]) -> None:

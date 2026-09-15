@@ -248,25 +248,26 @@ def test_files_view_shows_full_path():
                 await pilot.pause()
                 line = app.query_one("#file-path", Static)
 
+                def path_part() -> str:
+                    return str(line.render()).split(" │ ", 1)[1]
+
                 # sorted by disk size desc → the .mp4 is first
-                shown = str(line.render())
                 node = fl.selected()
                 assert node is not None
                 assert "YTS.MX" in node.path
                 # 60-col terminal, path is longer → left-elided, tail kept
-                assert shown.startswith("…"), shown
-                assert shown.endswith("[YTS.MX].mp4"), shown
+                assert path_part().startswith("…"), line.render()
+                assert path_part().endswith("[YTS.MX].mp4"), line.render()
 
                 # moving the cursor updates the line
                 await pilot.press("j")
                 await pilot.pause()
-                assert str(line.render()).endswith("small.txt"), line.render()
+                assert path_part().endswith("small.txt"), line.render()
 
                 # and it follows the cursor back to the top
                 await pilot.press("g")
                 await pilot.pause()
-                shown = str(line.render())
-                assert fl.selected().path.endswith(shown.lstrip("…")), shown
+                assert fl.selected().path.endswith(path_part().lstrip("…"))
         asyncio.run(main())
     finally:
         shutil.rmtree(root, ignore_errors=True)
@@ -376,4 +377,64 @@ def test_help_fits_and_scrolls_on_short_terminals():
             await pilot.press("k")
             await pilot.pause(0.1)
             assert box.scroll_y == box.max_scroll_y - 1
+    asyncio.run(main())
+
+
+
+def test_files_status_line_shows_current_sort():
+    """The sort was invisible: sort_label() existed with no caller."""
+    async def main():
+        app = StorageMarkApp(REPO)
+        async with app.run_test(size=(120, 30)) as pilot:
+            await wait_scan(app, pilot)
+            fl = app.query_one("#file-list", FileList)
+            line = app.query_one("#file-path", Static)
+            fl.focus()
+            await pilot.pause()
+
+            def sort_part() -> str:
+                return str(line.render()).split(" │ ", 1)[0]
+
+            assert sort_part() == "sort DISK↓", line.render()
+            await pilot.press("s")
+            await pilot.pause()
+            assert sort_part() == "sort LOGICAL↓", line.render()
+            await pilot.press("S")
+            await pilot.pause()
+            assert sort_part() == "sort LOGICAL↑", line.render()
+            # the label follows the real sort order, not just the key count
+            assert fl.sort_label() == "LOGICAL↑"
+
+            # an empty list still shows the sort
+            await pilot.press("slash")
+            for ch in "no-such-file-anywhere":
+                await pilot.press(ch)
+            await pilot.press("enter")
+            await pilot.pause()
+            assert not fl.rows
+            assert str(line.render()) == "sort LOGICAL↑"
+    asyncio.run(main())
+
+
+def test_subdirs_root_row_keeps_the_path_tail(tmp_path):
+    """The root's name is its full path; cutting it at 32 characters from
+    the right left an unreadable prefix."""
+    from storagemark.python.ui.views import SubdirsTree
+    deep = tmp_path / "a-fairly-long-folder-name" / "another-long-one" / "project-root"
+    deep.mkdir(parents=True)
+    (deep / "f.txt").write_bytes(b"x" * 10)
+
+    async def main():
+        app = StorageMarkApp(str(deep))
+        async with app.run_test(size=(120, 30)) as pilot:
+            await wait_scan(app, pilot)
+            tree = app.query_one("#subdirs-tree", SubdirsTree)
+            tree.load(app.dir_tree)
+            label = tree._label(app.dir_tree.root)
+            name_field = label[2:34]
+            assert name_field.startswith("…"), label
+            assert name_field.rstrip().endswith("project-root"), label
+            # non-root rows are unchanged
+            child = app.dir_tree.root.children[0]
+            assert tree._label(child)[2:34].rstrip() == child.name
     asyncio.run(main())

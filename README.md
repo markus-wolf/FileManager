@@ -223,7 +223,7 @@ the default branch; pushing the tag just marks the release).
 | `x` | Clear all marks |
 | `D` | Remove marked items (Trash or permanent — see below) |
 | `/` | Filter (glob or `~regex`, prefix `!` to invert) |
-| `s` / `S` | Cycle sort column / reverse sort |
+| `s` / `S` | Files: next sort key / reverse — the current sort (e.g. `sort DISK↓`) is shown at the left of the status line |
 | `u` | Toggle size unit (auto / GB / MB / KB / B) |
 | `t` | Toggle time field in Time view (mtime / atime / ctime) |
 | `r` | Re-scan current root |
@@ -388,7 +388,8 @@ Two ways to get names and paths out of the app:
 
 - **Keyboard:** `y` copies the full path of the item under the cursor (Files
   or SubDirs); `Y` copies every marked path, one per line. The Files tab also
-  shows the cursor row's full path in the status line above the key bar.
+  shows the current sort and the cursor row's full path in the status line
+  above the key bar.
 - **Mouse:** drag to select any text, then `cmd-C` (or `Ctrl-C`) to copy.
   `Ctrl-C` copies when a selection exists and otherwise keeps its usual
   meaning — interrupt a running scan, or quit when idle.

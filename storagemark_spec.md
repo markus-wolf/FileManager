@@ -187,8 +187,10 @@ Raw records are freed immediately after build to halve peak memory usage.
 ## 5. Views
 
 Examples below were captured from StorageMark v1.3.0 scanning the
-`storagemark/` source folder with two files marked. Sizes are small for that
-reason; the layout is what matters.
+`storagemark/` source folder with two files marked; the Files status line
+(§5.2) and the SubDirs root row (§5.1) were recaptured after the v1.3.1
+changes to them. Sizes are small because the folder is small; the layout is
+what matters.
 
 ### 5.0 Screen layout
 
@@ -219,13 +221,16 @@ reason; the layout is what matters.
 ### 5.1 SubDirs — directory tree
 
 ```
-  /Users/alex/Claude/FileManager/s   464.0 KB  ████████████████████ 100.0%
+  …/Claude/FileManager/storagemark   464.0 KB  ████████████████████ 100.0%
       python                             380.0 KB  ████████████████░░░░  81.9%
       c                                   76.0 KB  ███░░░░░░░░░░░░░░░░░  16.4%
       __init__.py                          4.0 KB  ░░░░░░░░░░░░░░░░░░░░   0.9%
 ```
 
 - Row: mark (`●`), name cut to 32 characters, size, 20-cell bar, percentage.
+  The root row's name is its full path; when that is longer than 32
+  characters it keeps the end (`…/Claude/FileManager/storagemark`), since the
+  header already shows the whole path.
 - **The bar and percentage are shares of the whole scan, not of the parent
   folder.**
 - Size is `display_size`: a folder's whole subtree, a file's own allocation.
@@ -245,19 +250,19 @@ reason; the layout is what matters.
 ●    40.0 KB     39.0 KB  2026-09-15 21:33  app.py
      36.0 KB     34.4 KB  2026-07-07 22:15  storagescanner
      28.0 KB     25.8 KB  2026-09-15 14:04  rules.cpython-313.pyc
-/Users/alex/Claude/FileManager/storagemark/python/ui/__pycache__/app.cpython-313.pyc
+sort DISK↓ │ /Users/alex/Claude/FileManager/storagemark/python/ui/__pycache__/app.cpython-313.pyc
 ```
 
 - Row: mark, size on disk, logical size, modification time, name. There is
   no column header row.
-- The last line is the **path status line**: the full path of the cursor row,
-  cut from the left so the name stays visible.
+- The last line is the **status line**: the current sort, then the full path
+  of the cursor row, cut from the left so the name stays visible.
 - Virtualized with Textual's Line API over `DirTree.flat`: only visible rows
   are rendered, so the view handles about a million rows (§14).
 - **Sort:** `s` cycles disk size → logical size → modified → accessed → name
-  → extension; `S` reverses. Default: disk size, largest first. **The
-  current sort is not shown on screen** (`FileList.sort_label` exists but has
-  no caller).
+  → extension; `S` reverses. Default: disk size, largest first. The status
+  line shows it as `DISK LOGICAL MODIFIED ACCESSED NAME EXT` with `↓`
+  (descending) or `↑`.
 - **What the list contains** — each narrows the one before, and all combine:
   1. all scanned files, or a rule's matches, which may include folders (`f`,
      §15);
@@ -342,32 +347,75 @@ Modal screens opened over the views. Esc closes each unless noted.
 
 ## 6. Interaction Model
 
-### 6.1 Key bindings (all views)
+This is the complete key reference. §5 describes what each key does inside
+each view; §5.6 lists the overlays.
 
-| Key | Action |
-|---|---|
-| `1`–`5` | Switch view |
-| `j` / `k` | Move cursor down / up |
-| `PgDn` / `PgUp` | Page down / up |
-| `g` / `G` | Jump to top / bottom |
-| `Enter` | Expand dir or drill into selection |
-| `Backspace` | Navigate up one level |
-| `Space` | Toggle what-if mark on item |
-| `/` | Open filter bar |
-| `s` | Cycle sort column |
-| `S` | Reverse sort direction |
-| `u` | Toggle size unit globally (auto / GB / MB / KB / B) |
-| `t` | Toggle time field in View 4 (mtime / atime / ctime) |
-| `r` | Re-scan current root |
-| `p` | Change root path (prompts inline) |
-| `e` | Export current view to CSV |
-| `q` | Quit |
-| `?` | Help overlay |
+### 6.1 Keys
 
-### 6.2 Filter bar
-- Accepts shell globs (`*.log`, `node_modules`) or regex (prefix with `~`)
-- Applied as an include filter; `!` prefix inverts
-- Persists until cleared with `Escape`
+| Key | Where | Action |
+|---|---|---|
+| `1`–`5` | anywhere | switch to SubDirs, Files, Types, Time, What-If |
+| `Tab` / `Shift-Tab` | anywhere | move focus between the tab strip and the view (Textual default) |
+| `h` / `l` | tab strip focused | previous / next tab |
+| `j` / `k`, `↓` / `↑` | lists, tables, tree, overlays | move the cursor; scroll the `?` overlay |
+| `PgDn` / `PgUp` | lists, tables, tree | page |
+| `g` / `G` | Files | first / last row |
+| `l` / `h` | SubDirs | expand / collapse, or move to the parent when already collapsed or on a file |
+| Enter | SubDirs | expand or collapse the folder |
+| Enter | Types, Time | open Files narrowed to that extension or age bucket |
+| Enter | What-If | write a cleanup shell script (§9) |
+| `s` / `S` | Files | next sort key / reverse; shown at the left of the status line |
+| `/` | anywhere | open the filter box; Enter applies it and shows Files |
+| Esc | filter box | clear the filter and any Types/Time narrowing |
+| Esc | Files | clear an applied rule |
+| `Space` | Files, SubDirs | mark or unmark the item (a folder mark covers its subtree) |
+| `Space` | Types, Time | mark every file in the group, or unmark them all if all are marked |
+| `Space` | What-If | unmark the row |
+| `A` / `U` | anywhere | mark / unmark every row in the Files list as currently narrowed; `A` with nothing narrowing it asks first |
+| `M` | anywhere | show only marked items in Files (toggle); switches to Files |
+| `x` | anywhere | clear all marks |
+| `D` | anywhere | remove the marked items: Trash or permanent (§14) |
+| `f` | anywhere | rule picker (§15) |
+| `F` | Files, SubDirs | make a rule from the cursor item (§15) |
+| `y` | Files, SubDirs | copy the cursor item's full path |
+| `Y` | anywhere | copy every marked path, one per line |
+| `u` | anywhere | cycle the size unit auto → GB → MB → KB → B; **affects Files only** |
+| `t` | anywhere | cycle the Time view's timestamp: modified, accessed, `ctime` |
+| `e` | anywhere | write the **whole scan** as CSV to `storagemark_export_<timestamp>.csv` in the current directory |
+| `E` | anywhere | scan errors overlay |
+| `r` | anywhere | re-scan the same root; **clears all marks** |
+| `p` | anywhere | change the root folder and re-scan |
+| `?` | anywhere | help overlay |
+| `q`, `Ctrl-Q` | anywhere | quit; an active scan and its scanner process are stopped |
+| `Ctrl-C` | text selected | copy the selection |
+| `Ctrl-C` | during a scan | interrupt overlay: quit, keep partial results, or continue (§12) |
+| `Ctrl-C` | otherwise | quit |
+
+There is no Backspace binding.
+
+### 6.2 Filter box
+
+- Matches part of the file **name**, ignoring case: `log` finds
+  `system.log`. Glob characters work inside it: `*.log`.
+- `~` prefix: regular expression on the name, e.g. `~^img_\d+`.
+- `!` prefix inverts either form.
+- Applies to the Files list and combines with any rule, Types/Time narrowing
+  and `M`. Esc in the box clears it.
+
+### 6.3 Mouse
+
+- Click a tab to switch views.
+- Drag to select text; `cmd-C` or `Ctrl-C` copies it. Double-click selects
+  the whole widget, triple-click its container.
+- The scroll wheel scrolls lists, tables and overlays.
+
+### 6.4 Clipboard
+
+Copies (`y`, `Y`, `Ctrl-C`/`cmd-C` on a selection) go out two ways, because
+neither works everywhere: an OSC 52 terminal escape (works over SSH and in
+iTerm2, Ghostty, kitty, WezTerm; ignored by macOS Terminal.app), and a local
+helper — `pbcopy`, or `wl-copy` / `xclip` / `xsel` on Linux. The
+notification names the routes used, e.g. `(osc52 + pbcopy)`.
 
 ---
 

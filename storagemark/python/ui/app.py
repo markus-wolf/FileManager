@@ -454,20 +454,26 @@ class StorageMarkApp(App):
         self.show_file_path(msg.node)
 
     def show_file_path(self, node) -> None:
-        """Render the cursor row's full path. Long paths keep their tail —
-        the file name is what you need to read."""
+        """Status line under the Files list: the current sort, then the
+        cursor row's full path. Long paths keep their tail — the file name
+        is what you need to read. Cursor moves and re-sorts both post
+        CursorMoved, so this stays current without extra wiring."""
         try:
             line = self.query_one("#file-path", Static)
+            fl = self.query_one("#file-list", FileList)
         except Exception:
             return   # a queued CursorMoved can arrive during app teardown
+        sort = f"sort {fl.sort_label()}"
         if node is None:
-            line.update("")
+            line.update(sort)
             return
+        prefix = f"{sort} │ "
         width = line.size.width or self.size.width or 80
+        room = max(10, width - len(prefix))
         path = node.path
-        if len(path) > width:
-            path = "…" + path[-(width - 1):]
-        line.update(path)
+        if len(path) > room:
+            path = "…" + path[-(room - 1):]
+        line.update(prefix + path)
 
     def marked_size(self) -> int:
         """Total disk of marked items; recomputed only when marks change."""
