@@ -69,6 +69,10 @@ class FileList(ScrollView, can_focus=True):
         self.filter_query = ""
         self.pre_filter: Callable[[FileNode], bool] | None = None  # finders/drills
         self.pre_label = ""
+        # A rule supplies its own node list rather than filtering all_files:
+        # rules can match directories, and all_files holds files only.
+        self.rule_nodes: list[FileNode] | None = None
+        self.rule_label = ""
         self.show_marked_only = False  # 'M': pre-flight review before D
         self.marked = marked          # shared with app
         self.unit_ref = unit_ref      # 1-elem list so app can swap unit globally
@@ -86,6 +90,15 @@ class FileList(ScrollView, can_focus=True):
         self.cursor = 0
         self.resort()
 
+    def set_rule_nodes(self, nodes: list[FileNode] | None,
+                       label: str = "") -> None:
+        """Show a rule's matches (files and/or directories) instead of the
+        full file list. Sorting, `/` filtering and `M` still compose."""
+        self.rule_nodes = nodes
+        self.rule_label = label
+        self.cursor = 0
+        self.resort()
+
     def resort(self) -> None:
         key = SORT_KEYS[self.sort_idx]
         if key == "name":
@@ -94,7 +107,7 @@ class FileList(ScrollView, can_focus=True):
             fn = lambda n: n.ext
         else:
             fn = lambda n: getattr(n, key)
-        src = self.all_files
+        src = self.all_files if self.rule_nodes is None else self.rule_nodes
         if self.show_marked_only:
             src = [n for n in src if n.path in self.marked]
         if self.pre_filter is not None:
@@ -277,4 +290,4 @@ class FileList(ScrollView, can_focus=True):
     def is_unfiltered(self) -> bool:
         """True when 'A' would mark the entire tree (no narrowing active)."""
         return (not self.filter_query and self.pre_filter is None
-                and not self.show_marked_only)
+                and self.rule_nodes is None and not self.show_marked_only)

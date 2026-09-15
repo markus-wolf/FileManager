@@ -126,3 +126,27 @@ def test_delete_one_file_stays_responsive():
         asyncio.run(main())
     finally:
         victim.unlink(missing_ok=True)
+
+
+def test_rules_picker_counts_within_a_bound():
+    """Pressing f counts every rule over the whole scan directly (spec §15,
+    option A: a short pause on a deliberate action is accepted). Bound the
+    pause so it cannot quietly grow into the old multi-second freezes."""
+    async def main():
+        app = StorageMarkApp(HOME)
+        async with app.run_test(size=(120, 40)) as pilot:
+            t0 = time.time()
+            while app.dir_tree is None and time.time() - t0 < 300:
+                await pilot.pause(0.5)
+            assert app.dir_tree
+
+            from storagemark.python.ui.rules_screen import RulesScreen
+            t_open = time.perf_counter()
+            await pilot.press("f")
+            while not (isinstance(app.screen, RulesScreen) and app.screen.results):
+                await pilot.pause(0.05)
+            waited = time.perf_counter() - t_open
+            print(f"\n  {len(app.dir_tree.flat):,} items, "
+                  f"{len(app.screen.results)} rules counted in {waited:.2f} s")
+            assert waited < 5.0, f"rule counting took {waited:.1f}s"
+    asyncio.run(main())

@@ -2,7 +2,7 @@
 
 Interactive terminal disk space analyser for macOS and Linux.
 
-Traverses a directory tree using a fast C scanner and presents results through a curses TUI with five views: directory tree, file list, file-type summary, time browser, and a what-if simulator for planning cleanups.
+Traverses a directory tree using a fast C scanner and presents results in a terminal UI with five views — directory tree, file list, file-type summary, time browser, and a what-if simulator — plus rules that find likely junk and Trash-first removal.
 
 ---
 
@@ -176,9 +176,6 @@ the default branch; pushing the tag just marks the release).
 # Scan a specific path
 ./run.sh /Users/alex/Documents
 
-# Start in a specific view (1–5)
-./run.sh /Users/alex -v 3
-
 # Non-interactive summary
 ./run.sh /tmp --once
 
@@ -231,6 +228,8 @@ the default branch; pushing the tag just marks the release).
 | `t` | Toggle time field in Time view (mtime / atime / ctime) |
 | `r` | Re-scan current root |
 | `p` | Change root path |
+| `f` | Rules: list saved searches with how much each finds; Enter shows its matches |
+| `F` | Make a rule from the file or folder under the cursor |
 | `y` / `Y` | Copy the selected item's full path / all marked paths to the clipboard |
 | `e` | Export current view to CSV |
 | `E` | Show scan errors (when any) |
@@ -240,6 +239,123 @@ the default branch; pushing the tag just marks the release).
 
 (The legacy curses interface was removed in v1.1 — the last version carrying
 it is tag `v1.0.1`.)
+
+---
+
+## Rules (`f` and `F`)
+
+A rule is a saved search for things that are usually safe to remove —
+installers you already used, cache folders, an app's own discard pile.
+Rules look at **names and locations** as well as size and age. That
+matters: the case that prompted this was an editor's `.trash` folder holding
+1.3 GB of old installers, all of them new, so an age test alone found none.
+
+### `f` — use a rule
+
+Press `f`. The list shows every rule with how much it finds **in the current
+scan**, largest first:
+
+```
+Rules — 7 rules
+RULE                      ITEMS          SIZE      WHY
+Caches                    50 folders     22.1 GB   regenerable, but some entries cost a re-download
+Build artifacts           103 folders    14.9 GB   rebuilt by the toolchain from source
+Installers and archives   18 files        2.5 GB   you already installed it; the installer is dead weight
+Big media                 10 files        2.3 GB   not junk by itself — but this is where the space is
+Logs                      173 files       1.5 GB   diagnostics; apps rotate or recreate them
+Big and old               3 files       398.1 MB   >100 MB and untouched for over a year
+App discard folders       —               —        an app's own throw-away pile; recreated on demand
+```
+
+(Measured on a home folder of 1.4 million items. Rules can overlap — a
+`__pycache__` inside a cache folder counts under both — so the sizes are not
+additive, and the list deliberately shows no grand total.)
+
+The list shows `counting…` for about a second on a large scan (7 rules over
+1.4 million items took 0.93 s) and then fills in.
+
+Move with `j`/`k`, press **Enter** on a rule, and the Files tab shows only its
+matches — folders as single rows, so a cache folder is one item to mark, not
+thousands of files. The header shows `Rule: <name> (Esc clears)`. Marking
+(`Space`, `A`) and removal (`D`) work as usual. **Esc** in the file list goes
+back to all files.
+
+Built-in rules:
+
+| Rule | Finds |
+|------|-------|
+| App discard folders | folders named `.trash` / `.trashes`, >1 MB |
+| Caches | folders named `Caches`, `Cache`, `CachedData`, `Code Cache`, `CachedExtensionVSIXs`, >10 MB |
+| Build artifacts | folders named `node_modules`, `__pycache__`, `.venv`, `venv`, `build`, `dist`, `target`, `.pytest_cache`, `.mypy_cache`, >10 MB |
+| Big and old | files >100 MB, untouched for over a year |
+| Installers and archives | `.dmg`, `.pkg`, `.iso`, `.zip`, `.tar.gz`, `.tgz`, `.xz`, >50 MB |
+| Big media | `.mov`, `.mp4`, `.mkv`, `.avi`, `.m4v`, `.wav`, `.raw`, `.tiff`, >100 MB |
+| Logs | `*.log`, >1 MB |
+
+Built-ins find *candidates*, not guaranteed junk — "Big media" in particular
+is where the space is, not what to delete. Read the list before pressing `D`;
+Trash-first removal means a wrong call is recoverable.
+
+### `F` — make a rule from what you're looking at
+
+Put the cursor on a file or folder (Files or SubDirs tab) and press `F`. You
+get a rule for the item and for each folder around it, **nearest first**,
+each with how much it would find across the whole scan:
+
+```
+Make a rule matching…
+…/Application Support/Cursor/CachedExtensionVSIXs/.trash/openai.chatgpt-26.908.40401-darwin-arm64
+PATTERN                                  ITEMS       SIZE
+folders named .trash                     …           …
+folders named cachedextensionvsixs       …           …
+folders named cursor                     …           …
+folders named application support        …           …
+```
+
+Each row is filled in with its count and size from your scan. That is how
+you settle "the path says it's junk, but I'm not sure": the numbers show
+what a pattern would catch before you save it. Expect them to grow as you go
+down the list — the nearest folder catches the least. A row that jumps to
+tens of gigabytes is a pattern that reaches far beyond what you meant. For a file with a real extension, the
+first offer is that extension (`files named *.dmg`).
+
+Press **Enter** to save the rule; it's appended to your rules file and is
+immediately available under `f`.
+
+### Your rules file
+
+`~/.config/storagemark/rules.toml`, created on first run with comments and a
+worked example. Rules there are **added** to the built-ins; a rule with the
+same `name` as a built-in replaces it. Edit it in any text editor — `F` only
+appends, so your comments and edits are kept.
+
+```toml
+[[rule]]
+name = "Cursor superseded extensions"
+why  = "old versions of extensions the editor already replaced"
+type = "dir"
+path_contains = ["/cursor/cachedextensionvsixs/"]
+name_glob = [".trash"]
+min_size = "10MB"
+```
+
+Every condition is optional. Conditions combine with **and**; a list inside
+one condition means **any of these**. Matching ignores upper/lower case.
+
+| Key | Meaning |
+|-----|---------|
+| `name` | required; shown in the list |
+| `why` | short reason, shown next to the rule |
+| `type` | `"file"` (default), `"dir"`, or `"any"` |
+| `name_glob` | the file or folder name, e.g. `["*.dmg"]` or `[".trash"]` |
+| `path_contains` | plain text anywhere in the full path, e.g. `["/Downloads/"]` |
+| `path_glob` | pattern on the full path; `*` matches across `/` |
+| `min_size`, `max_size` | e.g. `"100MB"`, `"2GB"`; for a folder, the size of everything inside it |
+| `older_than`, `newer_than` | e.g. `"90d"`, `"6mo"`, `"1y"`, `"2w"` |
+| `time_field` | which date `older_than`/`newer_than` use: `"mtime"` (default), `"atime"`, `"ctime"` |
+
+A mistake in the file doesn't stop the app: the broken rule is skipped, the
+rest still load, and pressing `f` shows what was wrong.
 
 ---
 

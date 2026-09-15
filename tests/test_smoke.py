@@ -348,3 +348,32 @@ def test_double_and_triple_click_do_not_crash():
             await pilot.pause()
             assert app.screen.selections, "triple-click selected nothing"
     asyncio.run(main())
+
+
+def test_help_fits_and_scrolls_on_short_terminals():
+    """The overlay is ~28 rows. It must stay on screen at 24 rows and the
+    keyboard must reach its last line. A Static silently ignores scroll
+    calls (allow_vertical_scroll is False), which an earlier version hit."""
+    from storagemark.python.ui.app import HelpScreen
+
+    async def main():
+        app = StorageMarkApp(REPO)
+        async with app.run_test(size=(100, 24)) as pilot:
+            await wait_scan(app, pilot)
+            await pilot.press("question_mark")
+            await pilot.pause(0.3)
+            assert isinstance(app.screen, HelpScreen)
+            from textual.containers import VerticalScroll
+            box = app.screen.query_one("#help-box", VerticalScroll)
+            text = app.screen.query_one("#help-text", Static)
+            assert text.region.width > 60, "help text collapsed to an empty box"
+            assert box.region.bottom <= 24, "help box runs off screen"
+            assert box.max_scroll_y > 0, "expected overflow at 24 rows"
+            for _ in range(box.max_scroll_y + 2):
+                await pilot.press("j")
+            await pilot.pause(0.2)
+            assert box.scroll_y == box.max_scroll_y, "j did not reach the end"
+            await pilot.press("k")
+            await pilot.pause(0.1)
+            assert box.scroll_y == box.max_scroll_y - 1
+    asyncio.run(main())

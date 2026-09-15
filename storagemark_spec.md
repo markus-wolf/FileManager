@@ -508,9 +508,10 @@ cost).
 
 ---
 
-## 15. Design: Rules (Phase 3, to implement)
+## 15. Design: Rules (Phase 3)
 
-Written 2026-09-14; not yet implemented. Replaces the fixed preset list in
+Written 2026-09-14; implemented 2026-09-15 (see "As built" at the end of
+this section for where the build departed from the design). Replaces the fixed preset list in
 Phase 3 with user-editable rules that match on **path patterns as well as**
 size and age.
 
@@ -626,3 +627,55 @@ the in-memory tree, so each candidate costs one pass over `DirTree.flat`.
 
 Estimate: engine and file ~150 lines, picker ~120, rule-from-path ~100,
 tests ~150.
+
+### As built — departures from the design above
+
+Found while implementing; each one changed the code.
+
+1. **Rules supply a source list, not a filter.** The Files view's
+   `all_files` holds files only, so a `type = "dir"` rule applied through
+   `pre_filter` could never match. `FileList.set_rule_nodes(nodes, label)`
+   replaces the source instead; sorting, `/` and `M` still compose on top.
+   Esc in the Files list clears the rule.
+2. **Sizes compare against `display_size`.** A folder's own entry is a few
+   bytes; `min_size` on a `.trash` folder must see its subtree
+   (`subtree_disk`), or the motivating rule rejects the folder it targets.
+3. **Built-ins live in code, not in the user's file.** Writing them into
+   `rules.toml` would freeze them at install time. The file is created with
+   comments and a commented-out example only; user rules are additive, and a
+   rule with a built-in's `name` replaces it.
+4. **Counting is synchronous.** 7 rules over 1,407,765 items: 0.93 s. A
+   thread worker did not avoid the pause — the counting is pure Python and
+   holds the interpreter lock, so the event loop stalled for the whole run
+   anyway (measured: zero event-loop turns during it). The screens paint
+   `counting…` first via `call_after_refresh`, then count. Guarded by
+   `test_rules_picker_counts_within_a_bound` (< 5 s).
+5. **No grand total in the picker.** Rules overlap — a `__pycache__` inside
+   a `Caches` folder counts under both — so summing sizes overstates.
+6. **`F` offers folders by name, nearest first — no `path_contains`
+   candidates.** `/.trash/` as a substring matches a folder's contents but
+   not the folder (its own path has no trailing slash). The offers are the
+   item's extension (files with a real one only) followed by
+   `folders named X` for each enclosing folder.
+7. **Candidates carry no size floor.** A floor excluded small items,
+   including the item under the cursor. Invariant, tested over every node:
+   each candidate matches its origin or one of its ancestors.
+8. **Literal names are escaped.** `glob.escape` for names (so
+   `Movies [YTS.MX]` is not a character class), `json.dumps` for TOML
+   strings (names with `"` or `\` produced invalid TOML), and Rich
+   `escape` for paths and rule text shown in markup.
+9. **Pseudo-extensions are not offered.** `splitext` on
+   `openai.chatgpt-26.908.40401-darwin-arm64` gives `.40401-darwin-arm64`;
+   only 1–6 alphanumeric, non-numeric extensions are offered.
+
+Measured on the author's home folder (1.4M items), built-in rules:
+Caches 50 folders / 22.1 GB, Build artifacts 103 folders / 14.9 GB,
+Installers and archives 18 files / 2.5 GB, Big media 10 files / 2.3 GB,
+Logs 173 files / 1.5 GB, Big and old 3 files / 398 MB, App discard folders
+none — Cursor had emptied its `.trash` after the 2026-09-14 measurement,
+which supports the original judgement that its contents were disposable.
+
+Tests: `tests/test_rules.py` (engine, file handling, round trips),
+`tests/test_rules_ui.py` (both screens, origin invariant, escaping),
+`tests/conftest.py` redirects `STORAGEMARK_CONFIG_DIR` so no test touches
+the real `~/.config/storagemark/rules.toml`.

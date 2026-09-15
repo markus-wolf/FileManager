@@ -10,11 +10,12 @@ import threading
 import time
 from datetime import datetime
 
+from rich.markup import escape
 from textual import work
 from textual.worker import get_current_worker
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Vertical
+from textual.containers import Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import (DataTable, Footer, Input, Static, TabbedContent,
                              TabPane, Tabs)
@@ -23,11 +24,13 @@ from ... import __version__
 from ..export import export_csv, export_cleanup_script
 from ..clipboard import native_copy
 from ..model import DirTree, fmt_size, short_hostname
+from ..rules import append_rule, ensure_rules_file, load_rules, rules_file_path
 from ..scanner import stream_records
 from ..trash import TrashError, delete_permanently, send_to_trash
 from .filelist import FileList
 from .marks import MarkSet
 from .remove import ProgressScreen, RemoveScreen, top_level_roots
+from .rules_screen import RuleFromPathScreen, RulesScreen
 from .theme import NORTON_THEME
 from .views import SubdirsTree, TimeTable, TypesTable, WhatIfPanel, TIME_FIELDS
 
@@ -68,7 +71,18 @@ class ErrorsScreen(ModalScreen):
 
 
 class HelpScreen(ModalScreen):
-    BINDINGS = [Binding("escape,q,question_mark", "dismiss", "Close")]
+    BINDINGS = [Binding("escape,q,question_mark", "dismiss", "Close"),
+                # The box scrolls on short terminals. It must be a
+                # VerticalScroll: a Static reports allow_vertical_scroll=False
+                # and ignores scroll calls, overflow-y or not.
+                Binding("j,down", "help_scroll(1)", show=False),
+                Binding("k,up", "help_scroll(-1)", show=False),
+                Binding("pagedown,space", "help_scroll(10)", show=False),
+                Binding("pageup", "help_scroll(-10)", show=False)]
+
+    def action_help_scroll(self, lines: int) -> None:
+        self.query_one("#help-box", VerticalScroll).scroll_relative(
+            y=lines, animate=False)
 
     HELP = """[b]StorageMark — keys[/b]
 
@@ -78,18 +92,28 @@ class HelpScreen(ModalScreen):
  PgUp/PgDn  page                 x       clear all marks
  g/G        top / bottom         D       remove marked (Trash / permanent)
  s / S      sort / reverse       Enter   expand / drill in
- /          filter (Esc clears)  y       copy full path of cursor item
- u          size unit            Y       copy all marked paths
- t          time field (Time)    e       export view to CSV
- r          re-scan              E       scan errors
- p          change root path     q       quit
- ?          this help
+ /          filter (Esc clears)  f       rules — what should I look at?
+ u          size unit            F       make a rule from this path
+ t          time field (Time)    y / Y   copy path / marked paths
+ r          re-scan              e       export view to CSV
+ p          change root path     E       scan errors
+ q          quit                 ?       this help
+
+ [b]Rules[/b] — saved searches for things worth removing
+ f   list the rules, each with how much it finds in this scan.
+     Enter shows a rule's matches in Files; Esc there goes back.
+ F   on a file or folder: offers "folders named …" for it and each
+     folder around it, nearest first, with how much each would find.
+     Enter saves the choice to ~/.config/storagemark/rules.toml.
 
  Drag with the mouse to select text; cmd-C (or Ctrl-C) copies it.
 """
 
     def compose(self) -> ComposeResult:
-        yield Static(self.HELP, id="help-box")
+        with VerticalScroll(id="help-box"):
+            # width:auto on the Static too — an auto-width container
+            # around a default-width Static collapses to an empty box.
+            yield Static(self.HELP, id="help-text")
 
 
 class ConfirmScreen(ModalScreen[bool]):
@@ -116,7 +140,7 @@ class ScanInterruptScreen(ModalScreen[str]):
     """
 
     def compose(self) -> ComposeResult:
-        # A bare Static, like HelpScreen: a width:auto container holding a
+        # A bare Static, not a container: a width:auto container holding a
         # default-width Static collapses to an empty box.
         yield Static(id="interrupt-box")
 
@@ -188,8 +212,11 @@ class StorageMarkApp(App):
     #errors-box, #path-box { width: 90%; height: 80%; margin: 2 4;
         background: $surface; border: solid $accent; padding: 1; }
     #path-box { height: auto; }
-    #help-box { width: auto; height: auto; margin: 4 8;
+    /* Help is ~28 rows tall; cap it to the screen and let it scroll
+       rather than clip on shorter terminals. */
+    #help-box { width: auto; height: auto; max-height: 100%; margin: 1 8;
         background: $surface; border: solid $accent; padding: 1 2; }
+    #help-text { width: auto; }
     #whatif-summary { height: auto; padding: 0 1; }
     #remove-box { width: 90%; height: 80%; margin: 2 4;
         background: $surface; border: solid $warning; padding: 1; }
@@ -200,6 +227,9 @@ class StorageMarkApp(App):
         background: $surface; border: solid $warning; padding: 1 2; }
     #interrupt-box { width: auto; height: auto; margin: 6 8;
         background: $surface; border: solid $accent; padding: 1 2; }
+    #rules-box, #fromparent-box { width: 90%; height: 80%; margin: 2 4;
+        background: $surface; border: solid $accent; padding: 1; }
+    #rules-head, #fromparent-head { height: auto; }
     #confirm-box { width: auto; height: auto; margin: 6 8;
         background: $surface; border: solid $warning; padding: 1 2; }
     """
@@ -224,6 +254,8 @@ class StorageMarkApp(App):
         Binding("x", "clear_marks", "Clear marks", show=False),
         Binding("t", "time_field", "Time field", show=False),
         Binding("D", "delete_marked", "Delete marked"),
+        Binding("f", "rules", "Rules"),
+        Binding("F", "rule_from_path", "Rule from path", show=False),
         Binding("y", "yank_path", "Copy path", show=False),
         Binding("Y", "yank_marked", "Copy marked paths", show=False),
         Binding("ctrl+c", "interrupt", "Interrupt", priority=True, show=False),
@@ -244,6 +276,8 @@ class StorageMarkApp(App):
         self.scan_error: str | None = None
         self.scan_last_path = ""
         self.partial = False
+        self.rules = []
+        self.rule_problems: list[str] = []
         self.scanning = False
         self._scan_abort = threading.Event()
         self._dirty: set[str] = set()      # views needing reload on activation
@@ -274,6 +308,8 @@ class StorageMarkApp(App):
     def on_mount(self) -> None:
         self.register_theme(NORTON_THEME)
         self.theme = "norton-commander"
+        ensure_rules_file()          # writes the commented template once
+        self.rules, self.rule_problems = load_rules()
         self.update_header()
         self.set_interval(0.25, self.update_header)
         self.query_one(TabbedContent).loading = True
@@ -307,11 +343,75 @@ class StorageMarkApp(App):
             if self.marked:
                 line2 += (f"  [b]Marked: {len(self.marked):,} items, "
                           f"{fmt_size(self.marked_size())}[/b]")
+            try:                    # active rule, if any (Esc clears it)
+                label = self.query_one("#file-list", FileList).rule_label
+            except Exception:
+                label = ""
+            if label:
+                line2 += f"  [b]Rule: {escape(label)}[/b] (Esc clears)"
         else:
             at = self.scan_last_path[-90:] if self.scan_last_path else "…"
             line2 = f" [b]{self.scan_count:,}[/b] objects   [dim]at: {at}[/dim]"
 
         hdr.update(line1 + "\n" + line2)
+
+    # ------------------------------------------------------ rules (f/F) --
+
+    def action_rules(self) -> None:
+        if not self.dir_tree:
+            self.notify("Still scanning.")
+            return
+        if self.rule_problems:      # surface a broken rules file once
+            self.notify("Problems in your rules file: "
+                        + escape("; ".join(self.rule_problems[:2])),
+                        severity="warning", timeout=12)
+
+        def apply(result) -> None:
+            if result is None:
+                return
+            fl = self.query_one("#file-list", FileList)
+            fl.set_rule_nodes(result.nodes, result.rule.name)
+            self.query_one(TabbedContent).active = "files"
+            fl.focus()
+            self.notify(f"{escape(result.rule.name)}: {result.count:,} items, "
+                        f"{fmt_size(result.total_size)} — "
+                        f"{escape(result.rule.why)}",
+                        timeout=10)
+
+        self.push_screen(RulesScreen(self.rules, self.dir_tree.flat), apply)
+
+    def action_rule_from_path(self) -> None:
+        if not self.dir_tree:
+            self.notify("Still scanning.")
+            return
+        node = self._cursor_node()
+        if node is None:
+            self.notify("Put the cursor on a file or folder first.")
+            return
+
+        def save(rule) -> None:
+            if rule is None:
+                return
+            try:
+                path = append_rule(rule)
+            except OSError as e:
+                self.notify(f"Could not write rules file: {e}",
+                            severity="error", timeout=15)
+                return
+            self.rules, self.rule_problems = load_rules()
+            self.notify(f"Saved rule “{escape(rule.name)}” to "
+                        f"{escape(str(path))} — "
+                        f"press f to use it, or edit that file to rename it.",
+                        timeout=15)
+
+        self.push_screen(RuleFromPathScreen(node, self.dir_tree.flat), save)
+
+    def action_clear_rule(self) -> None:
+        fl = self.query_one("#file-list", FileList)
+        if fl.rule_nodes is None:
+            return
+        fl.set_rule_nodes(None)
+        self.notify("Rule cleared — showing all files.")
 
     # ------------------------------------------------- clipboard (y/Y) --
 
@@ -577,6 +677,15 @@ class StorageMarkApp(App):
             box.disabled = True
             fl.focus()
             event.stop()
+            return
+
+        # Esc in the Files list drops an active rule — one gesture to get
+        # back to "all files", matching what Esc does in the filter box.
+        if event.key == "escape":
+            fl = self.query_one("#file-list", FileList)
+            if fl.has_focus and fl.rule_nodes is not None:
+                self.action_clear_rule()
+                event.stop()
 
     def action_export(self) -> None:
         if not self.dir_tree:
